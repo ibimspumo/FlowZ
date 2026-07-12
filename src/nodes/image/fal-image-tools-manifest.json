@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "id": "fal-ai/seedvr/upscale/image",
+      "label": "SeedVR Upscale",
+      "kind": "upscale",
+      "schemaHash": "seedvr-upscale-image-v1-20260711",
+      "premium": false,
+      "formats": ["png", "jpg", "webp"],
+      "upscaleModes": ["factor", "target"],
+      "factors": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      "targets": ["720p", "1080p", "1440p", "2160p"],
+      "supportsSeed": true,
+      "supportsNoise": true,
+      "pricePerMegapixelMicrounits": 1000
+    },
+    {
+      "id": "fal-ai/topaz/upscale/image",
+      "label": "Topaz Upscale · Premium",
+      "kind": "upscale",
+      "schemaHash": "topaz-upscale-image-v1-20260711",
+      "premium": true,
+      "formats": ["png", "jpeg"],
+      "factorRange": { "min": 1, "max": 4, "step": 0.1 },
+      "models": ["Low Resolution V2", "Standard V2", "CGI", "High Fidelity V2", "Text Refine", "Recovery", "Redefine", "Recovery V2", "Standard MAX", "Wonder", "Wonder 3"],
+      "supportsFaceEnhancement": true,
+      "supportsCropToFill": true,
+      "maxOutputMegapixels": 512
+    },
+    {
+      "id": "fal-ai/bria/background/remove",
+      "label": "Bria Background Removal",
+      "kind": "background-removal",
+      "schemaHash": "bria-background-remove-v1-20260711",
+      "premium": false,
+      "formats": ["png"],
+      "estimatedCostMicrounits": 18000
+    }
+  ]
+}

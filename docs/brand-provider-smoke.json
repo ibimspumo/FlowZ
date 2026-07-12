@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "executedAt": "2026-07-12T08:20:00+02:00",
+  "secretsIncluded": false,
+  "openRouter": {
+    "model": "google/gemini-3.5-flash",
+    "responseFormat": "json_schema.strict",
+    "candidateCountRequested": 1,
+    "candidateCountReceived": 1,
+    "requiredFieldsPresent": true,
+    "httpSuccess": true
+  },
+  "rdap": {
+    "bootstrap": "https://data.iana.org/rdap/dns.json",
+    "bootstrapHttps": true,
+    "knownRegisteredFixtureStatus": 200,
+    "randomNonexistentFixtureStatus": 404,
+    "flowzMapping": { "200": "registered", "404": "not-found" },
+    "note": "404 wird ausdrücklich nicht als frei oder kaufbar bezeichnet."
+  },
+  "falImage": {
+    "executedAt": "2026-07-12T16:21:47Z",
+    "test": "fal_image::tests::live_flux_schnell_downloads_decodes_and_persists_to_cas",
+    "result": "passed-first-submit",
+    "endpoint": "fal-ai/flux/schnell",
+    "model": "fal-ai/flux/schnell",
+    "schemaHash": "flux-schnell-2026-07-11",
+    "adapterManifestSha256": "f7d0880453a8a29e2fabb7e74aca6cd4a3e7804af2377edf337d0617b990ee33",
+    "adapterIdentitySha256": "f0494367ee6c8264c8a45ee10de19f8e5feaa1f5a8a1e4ec6832ac7986e4d198",
+    "configuration": {
+      "size": "square",
+      "outputFormat": "jpeg",
+      "variants": 1,
+      "steps": 1,
+      "seed": 42,
+      "references": 0,
+      "streaming": false
+    },
+    "transport": {
+      "submitAccepted": true,
+      "queueCompleted": true,
+      "downloadCompleted": true,
+      "requestId": "redacted-not-emitted-by-ephemeral-smoke",
+      "blindResubmitCount": 0
+    },
+    "output": {
+      "imageCount": 1,
+      "decoderValidated": true,
+      "mediaType": "image/* validated; exact subtype not emitted by the ephemeral smoke",
+      "dimensions": "positive and within the 16,384 px / 100 MP decoder bounds; exact values not emitted",
+      "assetSha256": "redacted; exact result hash successfully resolved through the ephemeral local CAS metadata lookup",
+      "localCasPersisted": true,
+      "atomicResultPersistence": true
+    },
+    "cost": {
+      "adapterPriceUsdPerMegapixel": 0.003,
+      "expectedMinimumEstimateMicrounits": 3000,
+      "persistedCostWasPositive": true,
+      "actualProviderCostMicrounits": null,
+      "exactPersistedCostMicrounits": null,
+      "provenanceNote": "Der bestehende Smoke prüft eine positive persistierte Kostenangabe, gibt den ephemeren exakten Wert beziehungsweise Provider-Billable-Units aber absichtlich nicht aus. Daher wird kein exakter Ist-Betrag behauptet."
+    },
+    "privacy": {
+      "keySource": "macOS Keychain",
+      "secretPrinted": false,
+      "providerUrlRecorded": false,
+      "base64Recorded": false
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "manifestVersion": 1,
+  "auditedAt": "2026-07-11",
+  "defaultModel": "google/nano-banana-2-lite",
+  "models": [
+    {
+      "id": "google/nano-banana-2-lite", "label": "Nano Banana 2 Lite", "description": "Schneller Standard für neue Bilder", "schemaHash": "nb2-lite-t2i-2026-07-11", "textEndpoint": "google/nano-banana-2-lite", "editEndpoint": null,
+      "references": { "min": 0, "max": 0 }, "sizes": ["1K"], "aspectRatios": ["auto","21:9","16:9","3:2","4:3","5:4","1:1","4:5","3:4","2:3","9:16","4:1","1:4","8:1","1:8"], "formats": ["jpeg","png","webp"], "variantMax": 4,
+      "seed": true, "quality": [], "background": [], "inputFidelity": [], "safetyTolerance": ["1","2","3","4","5","6"], "thinkingLevels": ["minimal","high"], "webSearch": false, "streaming": false, "streamingMode": "none", "streamingEndpoints": [], "price": { "kind": "provider" }
+    },
+    {
+      "id": "openai/gpt-image-2", "label": "GPT Image 2", "description": "Beste Qualität, langsamer", "schemaHash": "gpt-image-2-2026-07-11", "textEndpoint": "openai/gpt-image-2", "editEndpoint": "openai/gpt-image-2/edit",
+      "references": { "min": 0, "max": null }, "supportsMask": true, "sizes": ["auto","square_hd","square","portrait_4_3","portrait_16_9","landscape_4_3","landscape_16_9"], "aspectRatios": [], "formats": ["jpeg","png","webp"], "variantMax": 4,
+      "seed": false, "quality": ["auto","low","medium","high"], "background": [], "inputFidelity": [], "safetyTolerance": [], "thinkingLevels": [], "webSearch": false, "streaming": true, "streamingMode": "status", "streamingEndpoints": ["openai/gpt-image-2","openai/gpt-image-2/edit"], "price": { "kind": "provider" }
+    },
+    {
+      "id": "fal-ai/gpt-image-1.5", "label": "GPT Image 1.5", "description": "Logos und echte Transparenz", "schemaHash": "gpt-image-1-5-2026-07-11", "textEndpoint": "fal-ai/gpt-image-1.5", "editEndpoint": "fal-ai/gpt-image-1.5/edit",
+      "references": { "min": 0, "max": null }, "supportsMask": true, "sizes": ["1024x1024","1536x1024","1024x1536"], "aspectRatios": [], "formats": ["jpeg","png","webp"], "variantMax": 4,
+      "seed": false, "quality": ["low","medium","high"], "background": ["auto","transparent","opaque"], "inputFidelity": ["low","high"], "safetyTolerance": [], "thinkingLevels": [], "webSearch": false, "streaming": true, "streamingMode": "status", "streamingEndpoints": ["fal-ai/gpt-image-1.5","fal-ai/gpt-image-1.5/edit"], "price": { "kind": "gpt-image-1.5" }
+    },
+    {
+      "id": "fal-ai/nano-banana-pro", "label": "Nano Banana Pro", "description": "Hochwertig bis 4K und Web-Kontext", "schemaHash": "nb-pro-2026-07-11", "textEndpoint": "fal-ai/nano-banana-pro", "editEndpoint": "fal-ai/nano-banana-pro/edit",
+      "references": { "min": 0, "max": 14 }, "sizes": ["1K","2K","4K"], "aspectRatios": ["auto","21:9","16:9","3:2","4:3","5:4","1:1","4:5","3:4","2:3","9:16"], "formats": ["jpeg","png","webp"], "variantMax": 4,
+      "seed": true, "quality": [], "background": [], "inputFidelity": [], "safetyTolerance": ["1","2","3","4","5","6"], "thinkingLevels": [], "webSearch": true, "streaming": false, "streamingMode": "none", "streamingEndpoints": [], "price": { "kind": "nano-banana-pro" }
+    },
+    {
+      "id": "fal-ai/flux/schnell", "label": "FLUX.1 Schnell", "description": "Sehr günstig und schnell", "schemaHash": "flux-schnell-2026-07-11", "textEndpoint": "fal-ai/flux/schnell", "editEndpoint": "fal-ai/flux/schnell/redux",
+      "references": { "min": 0, "max": 1 }, "sizes": ["square_hd","square","portrait_4_3","portrait_16_9","landscape_4_3","landscape_16_9"], "aspectRatios": [], "formats": ["jpeg","png"], "variantMax": 4,
+      "seed": true, "quality": [], "background": [], "inputFidelity": [], "safetyTolerance": [], "thinkingLevels": [], "webSearch": false, "streaming": false, "streamingMode": "none", "streamingEndpoints": [], "reduxNoPrompt": true, "steps": { "min": 1, "max": 12 }, "guidance": { "min": 1, "max": 20 }, "acceleration": ["none","regular","high"], "safetyChecker": true, "price": { "kind": "flux-megapixel", "usd": 0.003 }
+    },
+    {
+      "id": "bytedance/seedream/v5/pro/text-to-image", "label": "Seedream 5 Pro", "description": "Neue Bytedance-Bildgeneration", "schemaHash": "seedream-v5-pro-2026-07-11", "textEndpoint": "bytedance/seedream/v5/pro/text-to-image", "editEndpoint": "bytedance/seedream/v5/pro/edit",
+      "references": { "min": 0, "max": 10 }, "sizes": ["auto_1K","auto_2K","square_hd","square","portrait_4_3","portrait_16_9","landscape_4_3","landscape_16_9"], "aspectRatios": [], "formats": ["jpeg","png"], "variantMax": 6,
+      "seed": false, "quality": [], "background": [], "inputFidelity": [], "safetyTolerance": ["1","2","3","4","5","6"], "thinkingLevels": [], "webSearch": false, "streaming": false, "streamingMode": "none", "streamingEndpoints": [], "price": { "kind": "seedream-v5" }
+    }
+  ]
+}

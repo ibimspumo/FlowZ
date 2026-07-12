@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "currency": "USD",
+  "auditedAt": "2026-07-12",
+  "endpoints": {
+    "google/nano-banana-2-lite": { "kind": "token-unknown", "source": "https://fal.ai/models/google/nano-banana-2-lite", "unit": "text-and-image-tokens", "ratesPerMillion": { "textInput": 0.3125, "textOutput": 1.875, "imageInput": 0.3125, "imageOutput": 37.5 } },
+    "openai/gpt-image-2": { "kind": "gpt-image-2-projection", "source": "https://fal.ai/models/openai/gpt-image-2", "unit": "output-image-projection", "tables": { "1024x768": { "low": 0.005, "medium": 0.037, "high": 0.145 }, "1024x1024": { "low": 0.006, "medium": 0.053, "high": 0.211 }, "1920x1080": { "low": 0.005, "medium": 0.04, "high": 0.158 } } },
+    "openai/gpt-image-2/edit": { "kind": "gpt-image-2-edit-projection", "source": "https://fal.ai/models/openai/gpt-image-2/edit", "unit": "output-image-projection-with-one-input", "tables": { "1024x768": { "low": 0.011, "medium": 0.043, "high": 0.151 }, "1024x1024": { "low": 0.015, "medium": 0.061, "high": 0.219 }, "1920x1080": { "low": 0.017, "medium": 0.053, "high": 0.158 } } },
+    "fal-ai/gpt-image-1.5": { "kind": "gpt-image-1.5-minimum", "source": "https://fal.ai/models/fal-ai/gpt-image-1.5", "unit": "output-image-plus-variable-text-tokens", "tables": { "1024x1024": { "low": 0.009, "medium": 0.034, "high": 0.133 }, "1024x1536": { "low": 0.013, "medium": 0.051, "high": 0.2 }, "1536x1024": { "low": 0.013, "medium": 0.05, "high": 0.199 } } },
+    "fal-ai/gpt-image-1.5/edit": { "kind": "gpt-image-1.5-edit-minimum", "source": "https://fal.ai/models/fal-ai/gpt-image-1.5/edit", "unit": "output-image-plus-variable-text-and-input-image-tokens", "tables": { "1024x1024": { "low": 0.009, "medium": 0.034, "high": 0.133 }, "1024x1536": { "low": 0.013, "medium": 0.051, "high": 0.2 }, "1536x1024": { "low": 0.013, "medium": 0.05, "high": 0.199 } } },
+    "fal-ai/nano-banana-pro": { "kind": "per-output", "source": "https://fal.ai/models/fal-ai/nano-banana-pro", "unit": "output-image", "rates": { "1K": 0.15, "2K": 0.15, "4K": 0.3 }, "webSearchPerRequest": 0.015 },
+    "fal-ai/nano-banana-pro/edit": { "kind": "per-output", "source": "https://fal.ai/models/fal-ai/nano-banana-pro/edit", "unit": "output-image", "rates": { "1K": 0.15, "2K": 0.15, "4K": 0.3 }, "webSearchPerRequest": 0.015 },
+    "fal-ai/flux/schnell": { "kind": "rounded-megapixel", "source": "https://fal.ai/models/fal-ai/flux/schnell", "unit": "rounded-up-output-megapixel", "usdPerMegapixel": 0.003 },
+    "fal-ai/flux/schnell/redux": { "kind": "rounded-megapixel", "source": "https://fal.ai/models/fal-ai/flux/schnell/redux", "unit": "rounded-up-output-megapixel", "usdPerMegapixel": 0.025 },
+    "bytedance/seedream/v5/pro/text-to-image": { "kind": "seedream-tier", "source": "https://fal.ai/models/bytedance/seedream/v5/pro/text-to-image", "unit": "output-image-tentative", "small": 0.0675, "large": 0.135 },
+    "bytedance/seedream/v5/pro/edit": { "kind": "seedream-edit-tier", "source": "https://fal.ai/models/bytedance/seedream/v5/pro/edit", "unit": "output-image-tentative", "small": 0.0675, "large": 0.135, "additionalInput": 0.0045 },
+    "bytedance/seedance-2.0/fast/text-to-video": { "kind": "per-second-720p", "source": "https://fal.ai/models/bytedance/seedance-2.0/fast/text-to-video", "unit": "generated-second-720p", "usdPerSecond": 0.2419, "audioSurcharge": 0 },
+    "bytedance/seedance-2.0/fast/image-to-video": { "kind": "per-second-720p", "source": "https://fal.ai/models/bytedance/seedance-2.0/fast/image-to-video", "unit": "generated-second-720p", "usdPerSecond": 0.2419, "audioSurcharge": 0 },
+    "bytedance/seedance-2.0/fast/reference-to-video": { "kind": "per-second-720p", "source": "https://fal.ai/models/bytedance/seedance-2.0/fast/reference-to-video", "unit": "generated-second-720p", "usdPerSecond": 0.2419, "audioSurcharge": 0 }
+  }
+}

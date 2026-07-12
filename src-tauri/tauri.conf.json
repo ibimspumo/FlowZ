@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FlowZ",
+  "version": "0.1.0",
+  "identifier": "dev.flowz.app",
+  "build": {
+    "beforeDevCommand": "corepack pnpm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "corepack pnpm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "title": "FlowZ", "width": 1440, "height": 900, "minWidth": 980, "minHeight": 640, "decorations": true }],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 https://openrouter.ai; img-src 'self' asset: http://asset.localhost flowz-media: http://flowz-media.localhost data: blob: https:; media-src 'self' asset: http://asset.localhost flowz-media: http://flowz-media.localhost blob:; font-src 'self' flowz-media: http://flowz-media.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
+    "resources": {
+      "third-party/ffmpeg/README.md": "licenses/ffmpeg/README.md",
+      "third-party/ffmpeg/LICENSE.md": "licenses/ffmpeg/LICENSE.md",
+      "third-party/ffmpeg/COPYING.LGPLv2.1": "licenses/ffmpeg/COPYING.LGPLv2.1"
+    },
+    "macOS": { "minimumSystemVersion": "11.0", "signingIdentity": "-" }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdEQkMxMDA2OUQyMzUyMTIKUldRU1VpT2RCaEM4ZlFCRTF2and6c05QaTFPTHh6eVozRzVQQXBpOTY5MXJsUGZ0NFB4Y20xdkMK",
+      "endpoints": ["https://github.com/ibimspumo/FlowZ/releases/latest/download/latest.json"]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "generator": "@tauri-apps/cli icon",
+  "master": {
+    "path": "assets/icon/flowz-icon-master-1024.png",
+    "sha256": "5764bbb628c50f82f214d84b2754cca976da30f18cceb568507b19464ded9dec"
+  },
+  "outputs": {
+    "src-tauri/icons/32x32.png": "e0fafab2704967d74a0353602c8fddb6cd553ad434ad2f9699c2320dd8eaedd1",
+    "src-tauri/icons/128x128.png": "e583d191fb02732ddd762396ad8217fe251e0b24c73ef24aa2b2875eab161dce",
+    "src-tauri/icons/128x128@2x.png": "4acab862bd6e6e217e37a36a75ccab2a4bc00a50b9ebd349f7810f5fef108670",
+    "src-tauri/icons/icon.icns": "828ed721fd5c7c9e61695bf1aa0273da83bd61dfca697f8650a42a1e0f5e2da9",
+    "src-tauri/icons/icon.ico": "26a24906c30f8dff0366c44331f62a55923483eaf0fa4fa2155c16c85bd6bc3e",
+    "public/flowz-icon.png": "4acab862bd6e6e217e37a36a75ccab2a4bc00a50b9ebd349f7810f5fef108670"
+  }
+}

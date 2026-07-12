@@ -1,0 +1,11 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen/schemas
+.DS_Store
+*.log
+artifacts/
+.tauri/
+.impeccable/
+src-tauri/flowz-updater.key
+src-tauri/flowz-updater.key.pub

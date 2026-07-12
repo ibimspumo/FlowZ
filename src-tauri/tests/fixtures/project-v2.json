@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "id": "9d6dc966-a658-47e2-90c1-13cd12038027",
+  "name": "TypeScript fixture",
+  "createdAt": "2026-07-11T08:00:00Z",
+  "updatedAt": "2026-07-11T08:01:00Z",
+  "graph": {
+    "nodes": [
+      {
+        "id": "text-1",
+        "moduleId": "core.text-input",
+        "moduleVersion": 1,
+        "position": { "x": 24, "y": 48 },
+        "label": "Brief",
+        "config": { "text": "Hello" },
+        "updatePolicy": "manual"
+      },
+      {
+        "id": "generate-1",
+        "moduleId": "ai.text-generation",
+        "moduleVersion": 1,
+        "position": { "x": 320, "y": 48 },
+        "config": { "prompt": "Antworte knapp" },
+        "updatePolicy": "auto"
+      }
+    ],
+    "edges": [{
+      "id": "edge-1",
+      "sourceNodeId": "text-1",
+      "sourcePortId": "text",
+      "targetNodeId": "generate-1",
+      "targetPortId": "text",
+      "order": 0
+    }],
+    "groups": [{
+      "id": "group-1",
+      "name": "Shared fixture flow",
+      "nodeIds": ["text-1", "generate-1"],
+      "color": "#38bdf8"
+    }]
+  },
+  "canvas": { "viewport": { "x": 0, "y": 0, "zoom": 1 } }
+}
