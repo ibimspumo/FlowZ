@@ -1331,7 +1331,12 @@ fn estimated_cost(
 }
 
 fn provider_cost(response: &Value) -> Option<i64> {
-    let value = response.pointer("/usage/cost")?;
+    // Queue result envelopes are not identical across fal endpoints: some put
+    // usage next to the result, others keep it below `data`. Both represent the
+    // provider's actually billed amount and are safe empirical samples.
+    let value = response
+        .pointer("/usage/cost")
+        .or_else(|| response.pointer("/data/usage/cost"))?;
     let decimal = match value {
         Value::String(v) => v.parse::<f64>().ok()?,
         Value::Number(v) => v.as_f64()?,
@@ -2552,6 +2557,23 @@ mod tests {
                 &[(1024, 1024), (1024, 1024)]
             ),
             Some(153_000)
+        );
+    }
+
+    #[test]
+    fn provider_cost_accepts_both_fal_result_envelopes_and_rejects_invalid_values() {
+        assert_eq!(
+            provider_cost(&json!({"usage":{"cost":"0.006"}})),
+            Some(6_000)
+        );
+        assert_eq!(
+            provider_cost(&json!({"data":{"usage":{"cost":0.0425}}})),
+            Some(42_500)
+        );
+        assert_eq!(provider_cost(&json!({"usage":{"cost":-1}})), None);
+        assert_eq!(
+            provider_cost(&json!({"usage":{"cost":"not-a-price"}})),
+            None
         );
     }
 

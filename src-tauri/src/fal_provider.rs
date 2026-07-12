@@ -1482,6 +1482,22 @@ pub fn extract_video_frame_result(
 mod tests {
     use super::*;
     #[test]
+    fn provider_cost_accepts_both_fal_result_envelopes_and_rejects_invalid_values() {
+        assert_eq!(
+            provider_cost(&json!({"usage":{"cost":"0.006"}})),
+            Some(6_000)
+        );
+        assert_eq!(
+            provider_cost(&json!({"data":{"usage":{"cost":0.0425}}})),
+            Some(42_500)
+        );
+        assert_eq!(provider_cost(&json!({"usage":{"cost":-1}})), None);
+        assert_eq!(
+            provider_cost(&json!({"usage":{"cost":"not-a-price"}})),
+            None
+        );
+    }
+    #[test]
     fn endpoints_fail_closed_and_schema_is_pinned() {
         assert!(endpoint_spec("fal-ai/unknown").is_none());
         assert_eq!(
