@@ -55,14 +55,27 @@ describe("canonical application node registry", () => {
         id: port.id,
         label: port.label,
         type: port.dataType,
+        ...(port.valueType.artifact ? { artifact: port.valueType.artifact } : {}),
         ...(port.optional ? { optional: true } : {}),
         ...(port.multiple !== undefined ? { multiple: port.multiple } : {}),
         })),
-        outputs: module.outputs.map((port) => ({ id: port.id, label: port.label, type: port.dataType })),
+        outputs: module.outputs.map((port) => ({ id: port.id, label: port.label, type: port.dataType, ...(port.valueType.artifact ? { artifact: port.valueType.artifact } : {}) })),
         defaults: module.defaultConfig,
         ...(module.visibility === "hidden" ? { hidden: true } : {}),
       });
     }
+  });
+
+  it("keeps Brand JSON payloads nominally distinct in the canonical registry", () => {
+    const brief=canonicalNodeRegistry.forKind("brandBrief").outputs[0].valueType;
+    const audience=canonicalNodeRegistry.forKind("audienceAnalysis").outputs[0].valueType;
+    const names=canonicalNodeRegistry.forKind("brandNames").outputs[0].valueType;
+    expect(brief).toMatchObject({kind:"scalar",scalar:"json",artifact:"flowz.brand-brief"});
+    expect(areValueTypesCompatible(brief,canonicalNodeRegistry.forKind("brandNames").inputs[0].valueType)).toBe(true);
+    expect(areValueTypesCompatible(brief,audience)).toBe(false);
+    expect(areValueTypesCompatible(names,canonicalNodeRegistry.forKind("domainCheck").inputs[0].valueType)).toBe(true);
+    expect(areValueTypesCompatible(audience,canonicalNodeRegistry.forKind("domainCheck").inputs[0].valueType)).toBe(false);
+    expect(canonicalNodeRegistry.forKind("artboard").inputs.map((port)=>port.valueType.artifact)).toEqual(["flowz.color-palette","flowz.font-pairing",undefined,undefined]);
   });
 
   it("rejects duplicate app ids, kinds and ports", () => {

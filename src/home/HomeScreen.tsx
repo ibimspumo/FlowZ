@@ -280,6 +280,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const filterItems: readonly { value: CatalogFilter; label: string }[] = [{value:'all',label:t('home.all')},{value:'flow',label:t('home.flows')},{value:'artboard',label:t('home.artboards')}];
   const sortItems: readonly { value: CatalogSort; label: string }[] = [{value:'updated',label:t('home.sort.updated')},{value:'opened',label:t('home.sort.opened')},{value:'name',label:t('home.sort.name')}];
   const menuDocument = props.contextMenu ? props.documents.find((document) => document.id === props.contextMenu?.documentId) : undefined;
+  const selectedVisible = props.documents.some((document) => document.id === props.selectedDocumentId);
   const setQuery = (part: Partial<CatalogQuery>) => props.onQueryChange({ ...props.query, ...part });
 
   return (
@@ -326,7 +327,9 @@ export function HomeScreen(props: HomeScreenProps) {
           event.preventDefault(); const next = props.documents[target]; if (!next) return;
           props.onSelect(next.id); options[target]?.focus();
         }}>
-          {props.documents.map((document, index) => <DocumentCard key={document.id} document={document} selected={props.selectedDocumentId === document.id} tabbable={props.selectedDocumentId === document.id || (!props.selectedDocumentId && index === 0)} locale={props.locale??''} coverSrc={props.resolveCoverSrc?.(document)} onSelect={() => props.onSelect(document.id)} onOpen={() => props.onOpen(document)} onRenameRequest={() => props.onRenameRequest(document)} onDeleteRequest={() => props.onDeleteRequest(document)} onContextMenuRequest={props.onContextMenuRequest} />)}
+          {props.documents.map((document, index) => {
+            return <DocumentCard key={document.id} document={document} selected={props.selectedDocumentId === document.id} tabbable={props.selectedDocumentId === document.id || (!selectedVisible && index === 0)} locale={props.locale??''} coverSrc={props.resolveCoverSrc?.(document)} onSelect={() => props.onSelect(document.id)} onOpen={() => props.onOpen(document)} onRenameRequest={() => props.onRenameRequest(document)} onDeleteRequest={() => props.onDeleteRequest(document)} onContextMenuRequest={props.onContextMenuRequest} />;
+          })}
         </section>
       )}
 

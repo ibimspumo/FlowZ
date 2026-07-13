@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFalImageInput, DEFAULT_FAL_IMAGE_MODEL, defaultFalImageConfig, falImageEndpoint, falImageModel, falImageRequestConfig, falImageStreamingMode, FAL_IMAGE_MODELS, formatAspectRatioLabel, formatImageSizeLabel, validateFalImageConfig } from './capabilities';
+import { buildFalImageInput, DEFAULT_FAL_IMAGE_MODEL, defaultFalImageConfig, falImageConfigFromValues, falImageEndpoint, falImageModel, falImageRequestConfig, falImageStreamingMode, FAL_IMAGE_MODELS, formatAspectRatioLabel, formatImageSizeLabel, normalizeFalImageConfig, selectFalImageModel, validateFalImageConfig } from './capabilities';
 
 describe('curated fal image adapters', () => {
   it('defaults exclusively to the requested fal model', () => {
@@ -11,6 +11,37 @@ describe('curated fal image adapters', () => {
     const model = falImageModel(DEFAULT_FAL_IMAGE_MODEL)!;
     expect(falImageEndpoint(model, 1)).toBeUndefined();
     expect(validateFalImageConfig(model, defaultFalImageConfig(model), 1, 'Prompt')).toContain('Dieses Modell unterstützt keine Referenzbilder.');
+  });
+  it('activates valid endpoint defaults and makes hidden parameters from another model inert', () => {
+    expect(selectFalImageModel('unknown')).toBeUndefined();
+    const previous = {
+      model: 'google/nano-banana-2-lite', resolution: '1K', aspectRatio: '1:1',
+      outputFormat: 'webp', variants: 1, safetyTolerance: '6', thinkingLevel: 'high', imageEndpointConfigs: {},
+    };
+    const patch = selectFalImageModel('fal-ai/flux/schnell', previous)!;
+    expect(patch).toMatchObject({ model: 'fal-ai/flux/schnell', resolution: 'square_hd', outputFormat: 'png', variants: 1, steps: 4, guidance: 3.5, acceleration: 'none', safetyChecker: false });
+    const merged = { ...previous, ...patch };
+    const model = falImageModel(String(merged.model))!;
+    expect(validateFalImageConfig(model, falImageConfigFromValues(merged), 0, 'Prompt')).toEqual([]);
+    expect(buildFalImageInput(model, falImageConfigFromValues(merged), 'Prompt', [])).not.toMatchObject({ safety_tolerance: expect.anything(), thinking_level: expect.anything() });
+    expect(patch.imageEndpointConfigs).toMatchObject({
+      'google/nano-banana-2-lite': { size: '1K', safetyTolerance: '6', thinkingLevel: 'high' },
+      'fal-ai/flux/schnell': { size: 'square_hd', steps: 4, guidance: 3.5 },
+    });
+  });
+  it('restores each model configuration and repairs invalid cached catalog values', () => {
+    const flux = {
+      model: 'fal-ai/flux/schnell', resolution: 'landscape_16_9', aspectRatio: 'auto', outputFormat: 'jpeg',
+      variants: 2, steps: 2, guidance: 7, acceleration: 'high', safetyChecker: true, imageEndpointConfigs: {},
+    };
+    const nanoPatch = selectFalImageModel('google/nano-banana-2-lite', flux)!;
+    const nano = { ...flux, ...nanoPatch, safetyTolerance: '6' };
+    const restored = selectFalImageModel('fal-ai/flux/schnell', nano)!;
+    expect(restored).toMatchObject({ resolution: 'landscape_16_9', outputFormat: 'jpeg', variants: 2, steps: 2, guidance: 7, acceleration: 'high', safetyChecker: true });
+    const model = falImageModel('fal-ai/flux/schnell')!;
+    expect(normalizeFalImageConfig(model, { size: '1K', steps: 99, guidance: -1, acceleration: 'turbo', safetyChecker: true })).toMatchObject({
+      size: 'square_hd', steps: 4, guidance: 3.5, acceleration: 'none', safetyChecker: true,
+    });
   });
   it('switches an editable model to its exact edit endpoint', () => {
     const model = falImageModel('fal-ai/nano-banana-pro')!;
@@ -33,7 +64,7 @@ describe('curated fal image adapters', () => {
     const gpt = falImageModel('fal-ai/gpt-image-1.5')!; const config = { ...defaultFalImageConfig(gpt), background: 'transparent', outputFormat: 'jpeg' };
     expect(validateFalImageConfig(gpt, config, 0, 'Logo')).toContain('Transparenz ist nur mit GPT Image 1.5 als PNG verfügbar.');
     const flux = falImageModel('fal-ai/flux/schnell')!;
-    expect(validateFalImageConfig(flux, { ...defaultFalImageConfig(flux), background: 'transparent' }, 0, 'Logo')).toContain('Dieser Hintergrundmodus wird nicht unterstützt.');
+    expect(buildFalImageInput(flux, { ...defaultFalImageConfig(flux), background: 'transparent' }, 'Logo', [])).not.toHaveProperty('background');
   });
   it('treats Flux Redux as promptless one-image variation', () => {
     const model = falImageModel('fal-ai/flux/schnell')!; const config = defaultFalImageConfig(model);

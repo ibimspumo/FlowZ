@@ -137,7 +137,7 @@ describe("module-owned fal runtime", () => {
       model: "bytedance/seedance-2.0/fast/image-to-video",
       aspectRatio: "auto",
     };
-    await dispatchAppNodeExecution(
+    const result = await dispatchAppNodeExecution(
       module,
       { ...node, config },
       {
@@ -167,5 +167,29 @@ describe("module-owned fal runtime", () => {
         signal,
       }),
     );
+    expect(result.outputs.startFrame).toMatchObject({
+      value: { type: "image", assetId: "s", mimeType: "image/jpeg" },
+    });
+    expect(result.outputs.endFrame).toMatchObject({
+      value: { type: "image", assetId: "e", mimeType: "image/jpeg" },
+    });
+  });
+
+  it("blocks a connected empty video source before any paid request", async () => {
+    const { module, node } = graph("videoGeneration");
+    const video = vi.fn();
+    await expect(
+      dispatchAppNodeExecution(module, node, {
+        signal,
+        inputs: {
+          prompt: [
+            { kind: "scalar", value: { type: "text", value: "Kamerafahrt" } },
+          ],
+        },
+        connectedInputPorts: new Set(["startFrame"]),
+        services: { fal: { image: vi.fn(), imageTool: vi.fn(), video } },
+      }),
+    ).rejects.toThrow(/Startbild besitzt noch kein Ergebnis/);
+    expect(video).not.toHaveBeenCalled();
   });
 });

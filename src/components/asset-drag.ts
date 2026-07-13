@@ -50,9 +50,6 @@ export function assetNodeConfig(item: LibraryAssetSummary) {
     assetVersion: item.version,
     assetName: item.name,
     assetKind: item.kind,
-    ...(item.sourceProjectId ? { assetSourceProjectId: item.sourceProjectId } : {}),
-    ...(item.sourceNodeId ? { assetSourceNodeId: item.sourceNodeId } : {}),
-    ...(item.sourceResultId ? { assetSourceResultId: item.sourceResultId } : {}),
   };
 }
 

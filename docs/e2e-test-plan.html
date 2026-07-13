@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FlowZ · End-to-End Qualitätsplan</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0d10;
+      --surface: #17171c;
+      --surface-2: #202027;
+      --ink: #f4f2f3;
+      --muted: #b9b3b7;
+      --line: #343139;
+      --rose: #ee6f93;
+      --blue: #72a5ff;
+      --magenta: #e879d5;
+      --yellow: #e4c767;
+      --green: #73d6a4;
+      --red: #ff7f87;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 64px 0 88px; }
+    header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; align-items: end; border-bottom: 1px solid var(--line); padding-bottom: 32px; }
+    h1 { margin: 0; max-width: 13ch; font-size: clamp(2.4rem, 6vw, 5rem); line-height: .95; letter-spacing: -.035em; text-wrap: balance; }
+    h2 { margin: 0 0 18px; font-size: 1.35rem; letter-spacing: -.015em; }
+    p { margin: 0; color: var(--muted); max-width: 72ch; }
+    .status { display: inline-flex; gap: 10px; align-items: center; padding: 9px 13px; border-radius: 999px; background: var(--surface); color: var(--ink); font-size: .86rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rose); box-shadow: 0 0 0 4px rgb(238 111 147 / 14%); }
+    section { margin-top: 52px; }
+    .lede { margin-top: 22px; font-size: 1.08rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    article { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+    article h3 { margin: 0 0 10px; font-size: 1rem; }
+    article p { font-size: .9rem; }
+    .type { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 9px; }
+    .text { background: var(--blue); } .image { background: var(--magenta); } .list { background: var(--yellow); } .system { background: var(--green); }
+    .flow { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding-bottom: 6px; }
+    .flow .step { min-width: 176px; flex: 1 0 176px; padding: 16px; background: var(--surface); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .flow .step:first-child { border-left: 1px solid var(--line); border-radius: 12px 0 0 12px; }
+    .flow .step:last-child { border-right: 1px solid var(--line); border-radius: 0 12px 12px 0; }
+    .flow .step + .step { border-left: 1px solid var(--line); }
+    .step b { display: block; margin-bottom: 6px; font-size: .9rem; }
+    .step span { color: var(--muted); font-size: .78rem; }
+    table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 14px; overflow: hidden; }
+    th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-size: .75rem; font-weight: 650; }
+    td { font-size: .88rem; }
+    tr:last-child td { border-bottom: 0; }
+    .sev { font-weight: 750; } .p0 { color: var(--red); } .p1 { color: #ffb37d; } .p2 { color: var(--yellow); } .p3 { color: var(--blue); }
+    .gate { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .pass { color: var(--green); }
+    code { color: var(--ink); background: var(--surface-2); padding: 2px 6px; border-radius: 6px; }
+    @media (max-width: 720px) {
+      main { width: min(100% - 24px, 1180px); padding-top: 36px; }
+      header, .gate { grid-template-columns: 1fr; }
+      h1 { max-width: 10ch; }
+      th:nth-child(3), td:nth-child(3) { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>End-to-End Qualitätsplan</h1>
+        <p class="lede">Abgeschlossener Produkt-Gate für FlowZ 0.1.3: reale Bedienung, kostenpflichtige Providerpfade, Graphlogik, Persistenz, Artboards und Fehlerresilienz.</p>
+      </div>
+      <div class="status"><span class="dot"></span>Audit abgeschlossen · 13. Juli 2026</div>
+    </header>
+
+    <section>
+      <h2>Testflächen</h2>
+      <div class="grid">
+        <article><h3><span class="type system"></span>Dokumente &amp; Navigation</h3><p>Erstellen, öffnen, Tabs, Umbenennen, Duplizieren, referenzbewusstes Löschen, Autosave, Neustart und Recovery.</p></article>
+        <article><h3><span class="type text"></span>Text &amp; Kontext</h3><p>Direkte Texte, Recherche, Webkontext, OpenRouter, Varianten, History, Kosten, Fehler- und Abbruchpfade.</p></article>
+        <article><h3><span class="type image"></span>Bild &amp; Video</h3><p>Import, fal.ai Generierung, Referenzen, Transformation, Frame-Extraktion, Vorschau, Kuration, Export und Sequenzen.</p></article>
+        <article><h3><span class="type list"></span>Graph &amp; Collections</h3><p>Alle Node-Arten, typisierte Ports, Fan-out, Listen, Overrides, Copy/Paste, Delete, Undo/Redo und ungültige Verbindungen.</p></article>
+        <article><h3><span class="type system"></span>Brand Foundry</h3><p>Briefing, Zielgruppe, Naming, Domains, Fonts, Farben, Logos, Artboard-Brücke und wiederverwendbare Artefakte.</p></article>
+        <article><h3><span class="type system"></span>Qualität &amp; Plattform</h3><p>Deutsch/Englisch, Tastatur, Fokus, Overflow, Zoom, kleine Fenster, reduzierte Bewegung, Updates und App-Neustart.</p></article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Arbeitswellen</h2>
+      <div class="flow" aria-label="Prüfablauf">
+        <div class="step"><b>1 · Inventur</b><span>Build, Tests, App-Zustand, Daten und Provider</span></div>
+        <div class="step"><b>2 · Exploration</b><span>Jeder sichtbare Button, jeder Modus, jeder Fehlerpfad</span></div>
+        <div class="step"><b>3 · Logik-Gate</b><span>Nodes, Ports, Typen, Overrides und Produktwert</span></div>
+        <div class="step"><b>4 · Korrektur</b><span>Eine priorisierte, zusammenhängende Reparaturwelle</span></div>
+        <div class="step"><b>5 · Regression</b><span>Gezielte Wiederholung plus Release-Verifikation</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Schweregrade und Evidenz</h2>
+      <table>
+        <thead><tr><th>Priorität</th><th>Bedeutung</th><th>Erforderliche Evidenz</th></tr></thead>
+        <tbody>
+          <tr><td class="sev p0">P0</td><td>Datenverlust, Sicherheitsproblem, Totalabsturz oder Kernaufgabe unmöglich.</td><td>Exakte Reproduktion, Logs/Stack, Fix und vollständiger Retest.</td></tr>
+          <tr><td class="sev p1">P1</td><td>Wesentlicher Workflow scheitert oder schwere UX-/A11y-Lücke.</td><td>Reproduktion, Ursache, Fix und gezielte Regression.</td></tr>
+          <tr><td class="sev p2">P2</td><td>Merkliche Störung mit brauchbarem Workaround.</td><td>Beobachtung, konkrete Korrektur und relevanter Check.</td></tr>
+          <tr><td class="sev p3">P3</td><td>Politur ohne nennenswerten Aufgabenverlust.</td><td>Nur aufnehmen, wenn klar verifizierbar und nicht nur Geschmack.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Abschluss-Gates</h2>
+      <div class="gate">
+        <article><h3 class="pass">Technisch bestanden</h3><p>Release-Build und relevante Tests grün; kein reproduzierbarer P0/P1; Crash-, Delete-, Persistenz- und Paid-Run-Pfade sind restart-sicher.</p></article>
+        <article><h3 class="pass">Produktseitig bestanden</h3><p>Jede sichtbare Node verdient ihren Platz, Ports und Overrides sind verständlich, Kernflows bieten klaren Mehrwert gegenüber einem einzelnen Chat-Generator.</p></article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

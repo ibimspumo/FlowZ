@@ -29,6 +29,9 @@ export type NodePort = InputPort;
 export type NodeExecutionContext = {
   signal: AbortSignal;
   inputs: Readonly<Record<string, readonly RuntimeValue[]>>;
+  /** Graph occupancy is distinct from materialized input values: an upstream
+   * port may be connected while its current result is empty. */
+  connectedInputPorts?: ReadonlySet<string>;
   reportProgress?: (progress: number, message?: string) => void;
   services?: NodeExecutionServices;
 };

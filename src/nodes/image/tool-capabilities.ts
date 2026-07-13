@@ -37,6 +37,11 @@ export function falImageTool(id: string): FalImageTool | undefined {
   return FAL_IMAGE_TOOLS.find((tool) => tool.id === id);
 }
 
+export function selectUpscaleTool(id: string): { model: string; premiumConfirmed: false } | undefined {
+  const tool = falImageTool(id);
+  return tool?.kind === 'upscale' ? { model: id, premiumConfirmed: false } : undefined;
+}
+
 export function defaultUpscaleConfig(endpoint = DEFAULT_UPSCALE_TOOL): UpscaleConfig {
   return {
     endpoint, upscaleMode: 'factor', factor: endpoint.includes('/topaz/') ? 1 : 2,

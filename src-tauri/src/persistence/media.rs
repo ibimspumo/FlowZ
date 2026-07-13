@@ -377,8 +377,10 @@ fn create_poster(
     result
 }
 
-/// Extracts a real frame from the immutable CAS video and imports the PNG back
-/// into CAS. `seconds` is clamped to the final decodable instant by ffmpeg.
+/// Extracts a real frame from the immutable CAS video and imports a JPEG back
+/// into CAS. The bundled LGPL-only sidecar intentionally has no zlib-backed PNG
+/// encoder, while its MJPEG encoder is always available and is already used for
+/// video posters. `seconds` is clamped to the final decodable instant by ffmpeg.
 pub fn extract_video_frame(
     store: &BlobStore,
     video_hash: &str,
@@ -388,12 +390,12 @@ pub fn extract_video_frame(
         return Err("Die Frame-Position ist ungültig.".into());
     }
     let source = store.path_for_hash(video_hash)?;
-    let target = std::env::temp_dir().join(format!("flowz-frame-{}.png", uuid::Uuid::new_v4()));
+    let target = std::env::temp_dir().join(format!("flowz-frame-{}.jpg", uuid::Uuid::new_v4()));
     let result = (|| {
         let status = Command::new(resolve_media_tool("ffmpeg")?)
             .args(["-v", "error", "-ss", &format!("{seconds:.6}"), "-i"])
             .arg(&source)
-            .args(["-frames:v", "1", "-f", "image2", "-y"])
+            .args(["-frames:v", "1", "-q:v", "2", "-f", "image2", "-y"])
             .arg(&target)
             .status()
             .map_err(|error| format!("Frame-Extraktion konnte nicht gestartet werden: {error}"))?;
@@ -404,9 +406,9 @@ pub fn extract_video_frame(
             );
         }
         let bytes = std::fs::read(&target).map_err(|error| error.to_string())?;
-        image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+        image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)
             .map_err(|_| "Der extrahierte Frame ist beschädigt.".to_string())?;
-        store.import_bytes(&bytes, "image/png".into(), Some("Video-Frame.png".into()))
+        store.import_bytes(&bytes, "image/jpeg".into(), Some("Video-Frame.jpg".into()))
     })();
     let _ = std::fs::remove_file(target);
     result
@@ -617,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn real_video_import_creates_a_decodable_poster() {
+    fn real_video_import_creates_decodable_derivatives_with_the_bundled_sidecar() {
         let Ok(ffmpeg) = resolve_media_tool("ffmpeg") else {
             return;
         };
@@ -656,5 +658,8 @@ mod tests {
         let poster = imported.poster_hash.expect("video poster");
         assert_eq!(store.metadata(&poster).unwrap().media_type, "image/jpeg");
         assert!(store.size(&poster).unwrap() > 100);
+        let frame = extract_video_frame(&store, &imported.hash, 0.0).unwrap();
+        assert_eq!(frame.media_type, "image/jpeg");
+        assert!(store.size(&frame.hash).unwrap() > 100);
     }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildImageToolInput, defaultUpscaleConfig, outputDimensions, topazEstimateMicrounits, validateUpscaleConfig } from './tool-capabilities';
+import { buildImageToolInput, defaultUpscaleConfig, outputDimensions, selectUpscaleTool, topazEstimateMicrounits, validateUpscaleConfig } from './tool-capabilities';
 
 describe('fal image tool capabilities', () => {
   it('builds exact SeedVR target fields', () => {
@@ -16,6 +16,10 @@ describe('fal image tool capabilities', () => {
   });
   it('requires an explicit Topaz confirmation', () => {
     expect(validateUpscaleConfig(defaultUpscaleConfig('fal-ai/topaz/upscale/image'), 1024, 1024)).toContain('Bestätige den Premium-Lauf und die angezeigte Kostenstufe.');
+  });
+  it('preserves scale parameters on tool change and only resets paid confirmation', () => {
+    expect(selectUpscaleTool('fal-ai/topaz/upscale/image')).toEqual({ model: 'fal-ai/topaz/upscale/image', premiumConfirmed: false });
+    expect(selectUpscaleTool('unknown')).toBeUndefined();
   });
   it('accepts fractional Topaz factors only within the exact 1..4 schema', () => {
     const config = { ...defaultUpscaleConfig('fal-ai/topaz/upscale/image'), factor: 1.5, premiumConfirmed: true, cropToFill: true };

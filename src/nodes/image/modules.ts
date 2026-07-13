@@ -281,13 +281,16 @@ const transformSchema = exactConfig({
   ...optionalExportSchema,
 });
 function sourceValues(
-  inputs: Readonly<Record<string, readonly RuntimeValue[]>>,
+  context: import("../../engine/node-module").NodeExecutionContext,
   config: Record<string, JsonValue>,
 ) {
+  const inputs = context.inputs;
   const scalar = inputs.image ?? [];
   const lists = inputs.imageLists ?? [];
   const binding = directMediaBindingFromConfig(config);
-  if (scalar.length && lists.length && binding?.priority !== "override")
+  const scalarOccupied = context.connectedInputPorts?.has("image") ?? scalar.length > 0;
+  const listOccupied = context.connectedInputPorts?.has("imageLists") ?? lists.length > 0;
+  if (scalarOccupied && listOccupied && binding?.priority !== "override")
     throw new Error(
       "Verbinde entweder ein einzelnes Bild oder eine Bildliste, nicht beides gleichzeitig.",
     );
@@ -296,7 +299,7 @@ function sourceValues(
   const resolution = resolveDirectMediaInputs(connected.map((item) => {
     if (item.type !== "image") throw new Error("Bildquelle hat den falschen Typ.");
     return item.assetId.startsWith("flowz-cas:") ? item.assetId : `flowz-cas:${item.assetId}`;
-  }), binding);
+  }), binding, ["image", "imageLists"].filter((port) => context.connectedInputPorts?.has(port)).length);
   if (!resolution.values.length)
     throw new Error(
       "Verbinde ein vollständig lokal gespeichertes Bild oder hinterlege eine direkte Bildreferenz.",
@@ -309,7 +312,7 @@ async function mapImages(
   execute: (source: ScalarValue, signal: AbortSignal) => Promise<ScalarValue>,
 ) {
   context.signal.throwIfAborted();
-  const sources = sourceValues(context.inputs, config);
+  const sources = sourceValues(context, config);
   const service = context.services?.listMap;
   if (!service)
     throw new Error("Der Listen-Mapping-Dienst ist nicht verfügbar.");

@@ -22,7 +22,7 @@ describe("Artboard Flow linking", () => {
       id: "image-node", type: "flowNode", position: { x: 0, y: 0 },
       data: { kind: "imageGeneration", label: "Bilder", status: "fresh", updatePolicy: "manual", outputValues: { images: [output] }, history: [{ id: "result-real", createdAt: "2026-07-12T10:00:00.000Z", value: "flowz-media://localhost/preview", blobHash: hash, active: true }] },
     }] as FlowNode[];
-    const edges = [{ id: "edge-image", source: "image-node", target: "artboard-node", sourceHandle: "images", targetHandle: "images", data: { dataType: "image", order: 0 } }] as FlowEdge[];
+    const edges = [{ id: "edge-image", source: "image-node", target: "artboard-node", sourceHandle: "images", targetHandle: "imageLists", data: { dataType: "imageList", order: 0 } }] as FlowEdge[];
     const snapshot = await createArtboardInputSnapshot({ flowId: "flow-1", nodeId: "artboard-node", upstream: { fingerprint: "current", palette: [], fonts: [], images: [output] } }, nodes, edges);
     expect(snapshot.bindings["images-0"]).toMatchObject({ source: { resultId: "result-real" }, snapshot: { kind: "cas", hash } });
     expect(artboardNodeRequestFromFlow("flow-1", "artboard-node", nodes, edges)).toEqual({

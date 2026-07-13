@@ -91,6 +91,7 @@
 
 .awb-left-panel, .awb-inspector {
   grid-row: 2;
+  box-sizing: border-box;
   min-width: 0;
   overflow: hidden;
   display: flex;
@@ -260,6 +261,14 @@
 .awb-layer-list > div:hover, .awb-layer-list > div.is-active { color: var(--ink, #fff); background: var(--surface-raised, #322d33); }
 .awb-layer-list > div > input[type="checkbox"] { width: 15px; height: 15px; margin: 0 2px 0 5px; accent-color: var(--primary, #ee3399); }
 .awb-layer-list button { width: 25px; height: 30px; display: grid; place-items: center; border-radius: 5px; }
+.awb-layer-list button:focus-visible,
+.awb-layer-list input[type="checkbox"]:focus-visible,
+.awb-add-row button:focus-visible,
+.awb-panel-tabs button:focus-visible,
+.awb-panel-reveal:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
 .awb-layer-list .awb-layer-name { min-width: 0; flex: 1; padding: 0 7px; display: flex; align-items: center; justify-content: flex-start; gap: 7px; text-align: left; }
 .awb-layer-name span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .awb-asset-grid { padding: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; overflow: auto; }
@@ -288,6 +297,10 @@
 .awb-fields input, .awb-fields textarea { width: 100%; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid var(--line, #39343a); border-radius: 6px; color: var(--ink, #fff); background: var(--bg, #141215); font: 11px/1.4 inherit; }
 .awb-fields textarea { height: auto; min-height: 92px; padding-block: 8px; resize: vertical; }
 .awb-fields input:focus, .awb-fields textarea:focus { border-color: var(--primary, #ee3399); outline: 0; }
+.awb-fields input:focus-visible, .awb-fields textarea:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
 .awb-fields input[type="color"] { padding: 4px; cursor: pointer; }
 .awb-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .awb-fields .custom-select-trigger { height: 34px; }
@@ -365,12 +378,15 @@
   .awb-left-panel, .awb-inspector { position: fixed; z-index: 7; top: var(--awb-toolbar); bottom: 0; width: min(260px, 82vw); }
   .awb-left-panel { left: 0; }
   .awb-inspector { right: 0; }
+  .awb-shell.has-left.has-right .awb-left-panel,
+  .awb-shell.has-left.has-right .awb-inspector { width: 50vw; }
   .awb-shell.has-left, .awb-shell.has-right, .awb-shell.has-left.has-right { grid-template-columns: minmax(0, 1fr); }
   .awb-shell.has-left .awb-canvas, .awb-shell.has-right .awb-canvas, .awb-shell.has-left.has-right .awb-canvas { grid-column: 1; }
   .awb-document-name { width: 112px; }
   .awb-zoom { display: none; }
   .awb-topbar .awb-button { width: 34px; padding: 0; }
   .awb-topbar .awb-button { font-size: 0; }
+  .awb-shell.has-left.has-right .awb-field-row { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
   .awb-world { will-change: auto; }

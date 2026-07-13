@@ -7,16 +7,20 @@ import {
   runFalVideo,
 } from "../api";
 import type { NodeExecutionServices } from "../engine/node-module";
-import { currentExecutionFingerprint } from "../store";
+import { useFlowStore } from "../store";
+import { currentExecutionSnapshot } from "./execution-snapshot";
 
 /** Desktop implementation of the provider-neutral Fal service boundary. The
  * Rust commands own uploads, credentials, paid-run journals, resume and CAS. */
 export function createFalExecutionServices(
   projectId: string,
 ): NonNullable<NodeExecutionServices["fal"]> {
-  const fingerprint = async (nodeId: string) => ({
-    execution: currentExecutionFingerprint(nodeId) ?? "",
-  });
+  const snapshot = (nodeId: string, requestContract: Record<string, unknown>) => {
+    const state = useFlowStore.getState();
+    if (state.document?.id !== projectId || state.revision == null)
+      throw new Error("Das Projekt wurde während der Ausführung gewechselt.");
+    return currentExecutionSnapshot(nodeId, state.revision, requestContract);
+  };
   return {
     image: async (request) => {
       const cancel = () => {
@@ -38,7 +42,16 @@ export function createFalExecutionServices(
           config: request.config,
           costEstimate: request.costEstimate,
           costContext: request.costContext,
-          inputFingerprint: await fingerprint(request.nodeId),
+          inputFingerprint: await snapshot(request.nodeId, {
+            modelId: request.modelId,
+            endpoint: request.endpoint,
+            schemaHash: request.schemaHash,
+            prompt: request.prompt,
+            references: request.references,
+            mask: request.mask ?? null,
+            config: request.config,
+            streaming: request.streaming,
+          }),
           streaming: request.streaming,
         });
         request.signal.throwIfAborted();
@@ -63,7 +76,12 @@ export function createFalExecutionServices(
           source: request.source,
           config: request.config,
           estimatedCostMicrounits: request.estimatedCostMicrounits,
-          inputFingerprint: await fingerprint(request.nodeId),
+          inputFingerprint: await snapshot(request.nodeId, {
+            endpoint: request.endpoint,
+            schemaHash: request.schemaHash,
+            source: request.source,
+            config: request.config,
+          }),
         });
         request.signal.throwIfAborted();
         return result;
@@ -97,7 +115,20 @@ export function createFalExecutionServices(
           estimatedCostMicrounits: request.estimatedCostMicrounits,
           costEstimate: request.costEstimate,
           costContext: request.costContext,
-          inputFingerprint: await fingerprint(request.nodeId),
+          inputFingerprint: await snapshot(request.nodeId, {
+            endpoint: request.endpoint,
+            schemaHash: request.schemaHash,
+            prompt: request.prompt,
+            duration: request.duration,
+            resolution: request.resolution,
+            aspectRatio: request.aspectRatio,
+            generateAudio: request.generateAudio,
+            bitrateMode: request.bitrateMode,
+            seed: request.seed ?? null,
+            startFrame: request.startFrame ?? null,
+            endFrame: request.endFrame ?? null,
+            references: request.references,
+          }),
         });
         request.signal.throwIfAborted();
         return result;

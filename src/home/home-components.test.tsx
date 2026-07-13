@@ -40,6 +40,12 @@ describe("HomeScreen", () => {
     expect(getHomeCardNavigationIndex("Enter", 0, 3)).toBeUndefined();
   });
 
+  it("keeps one visible card in the tab order when the selected document is filtered out", () => {
+    const html = renderToStaticMarkup(<HomeScreen {...callbacks} documents={[documentRecord("flow", "flow"), documentRecord("board", "artboard")]} query={{ search: "", filter: "all", sort: "updated" }} selectedDocumentId="hidden-by-filter" />);
+    expect(html.match(/tabindex="0"/g)).toHaveLength(1);
+    expect(html.match(/tabindex="-1"/g)).toHaveLength(1);
+  });
+
   it("renders both document kinds as explicit text and icons without mounting an editor", () => {
     const html = renderToStaticMarkup(<HomeScreen {...callbacks} documents={[documentRecord("flow", "flow"), documentRecord("board", "artboard")]} query={{ search: "", filter: "all", sort: "updated" }} selectedDocumentId="flow" />);
     expect(html).toContain("Neuer Flow");

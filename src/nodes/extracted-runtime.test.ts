@@ -48,6 +48,21 @@ describe("extracted native node runtime", () => {
     await expect(dispatchAppNodeExecution(transform.module, transform.graph, { signal, inputs: { image: [{ kind: "scalar", value: { type: "text", value: "wrong" } }] }, services: { imageOperations: { transform: vi.fn(), trimTransparent: vi.fn() }, listMap: { execute: executeListProcessing } } })).rejects.toThrow(/Bildquelle/);
   });
 
+  it("does not use a local fallback behind an occupied cable with no current value", async () => {
+    const directMedia = {
+      schemaVersion: 1 as const, kind: "image" as const, blobHash: "a".repeat(64), mediaType: "image/png", priority: "fallback" as const,
+      source: { kind: "asset-version" as const, assetId: "asset", versionId: "version", version: 1 },
+    };
+    const base = node("imageTransform");
+    const transform = { ...base, graph: { ...base.graph, config: { ...base.graph.config, directMedia } } };
+    const transformCall = vi.fn();
+    await expect(dispatchAppNodeExecution(transform.module, transform.graph, {
+      signal, inputs: {}, connectedInputPorts: new Set(["image"]),
+      services: { imageOperations: { transform: transformCall, trimTransparent: vi.fn() }, listMap: { execute: executeListProcessing } },
+    })).rejects.toThrow(/vollständig lokal gespeichertes Bild|direkte Bildreferenz/);
+    expect(transformCall).not.toHaveBeenCalled();
+  });
+
   it("discards asynchronous provider and image results after cancellation", async () => {
     let resolveSearch!: (value: { provider: string; markdown: string; resultCount: number }) => void;
     const searchResult = new Promise<{ provider: string; markdown: string; resultCount: number }>((resolve) => { resolveSearch = resolve; });

@@ -1,4 +1,4 @@
-import { LoaderCircle, Play, Square } from "lucide-react";
+import { Play, Square } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { JsonValue } from "../domain/project";
 import type { RuntimeValue } from "../domain/values";
@@ -10,10 +10,10 @@ import { isDesktopRuntime } from "../persistence/projects";
 import { currentExecutionFingerprint, useFlowStore } from "../store";
 import type { FlowNodeData, ModelOption, NodeKind } from "../types";
 import { CustomSelect } from "../components/CustomSelect";
-import { DeferredMarkdown } from "../components/DeferredMarkdown";
 import { DeferredBrandArtifact } from "../components/DeferredBrandArtifact";
+import { InlineOutputPreview } from "../components/InlineOutputPreview";
 import { nodeRunLabel } from "../components/node-run-labels";
-import { getLocale } from "../i18n";
+import { appErrorMessage, getLocale } from "../i18n";
 import { ArtboardNodeReference } from "../components/ArtboardNodeReference";
 import { DirectImageSource } from "../components/DirectImageSource";
 import { artboardNodeRequestFromFlow } from "../artboard-workspace/node-linking";
@@ -25,8 +25,17 @@ import {
   useModuleNodeUpdate,
 } from "./extracted-node-views";
 import { nodeSpecifications } from "./module-specifications";
+import { currentExecutionSnapshot } from "./execution-snapshot";
+import {
+  paidBrandOutputSnapshot,
+  paidBrandResultKind,
+  passiveInputSignature,
+  providerResultTargetCurrent,
+  providerVariantPersistencePlan,
+} from "./provider-persistence";
+import { connectedInputPortIds } from "./direct-media";
+import { runtimeValuesFromDisplay } from "./runtime-display-values";
 
-const CAS = /^flowz-cas:([a-f0-9]{64})$/;
 const tr = (de: string, en: string) => (getLocale() === "en" ? en : de);
 function runtimeInputs(
   nodeId: string,
@@ -38,29 +47,7 @@ function runtimeInputs(
   for (const port of definition.inputs) {
     const raw = state.inputsForPort(nodeId, port.id);
     if (!raw.length) continue;
-    result[port.id] = raw.map((value) => {
-      const hash = CAS.exec(value)?.[1];
-      if (
-        port.type === "image" ||
-        port.type === "video" ||
-        port.type === "audio"
-      )
-        return {
-          kind: "scalar",
-          value: { type: port.type, assetId: hash ?? value },
-        } as RuntimeValue;
-      if (port.type === "json") {
-        let parsed: JsonValue = value;
-        try {
-          parsed = JSON.parse(value) as JsonValue;
-        } catch {}
-        return {
-          kind: "scalar",
-          value: { type: "json", value: parsed },
-        } as RuntimeValue;
-      }
-      return { kind: "scalar", value: { type: "text", value } } as RuntimeValue;
-    });
+    result[port.id] = runtimeValuesFromDisplay(raw, port.type);
   }
   return result;
 }
@@ -71,6 +58,18 @@ function outputText(value: RuntimeValue | undefined) {
   if (value.value.type === "json") return JSON.stringify(value.value.value);
   if (value.value.type === "webpage") return value.value.url;
   return `flowz-cas:${value.value.assetId}`;
+}
+
+export function outputDisplayValue(value: RuntimeValue | undefined): string | string[] | undefined {
+  if (!value) return;
+  if (value.kind === "list")
+    return value.items.map((item) => {
+      if (item.type === "text") return item.value;
+      if (item.type === "json") return JSON.stringify(item.value);
+      if (item.type === "webpage") return item.url;
+      return `flowz-cas:${item.assetId}`;
+    });
+  return outputText(value);
 }
 
 function ModelField({
@@ -155,6 +154,11 @@ function ProviderBody(
   const node = moduleRuntimeProps(props, kind),
     update = useModuleNodeUpdate(node),
     projectId = useFlowStore((state) => state.document?.id),
+    passiveSource = useFlowStore((state) =>
+      options.passive
+        ? passiveInputSignature(node.id, state.edges, state.nodes)
+        : "",
+    ),
     controller = useRef<AbortController | undefined>(undefined),
     running = useRef(false);
   const execute = async () => {
@@ -173,13 +177,15 @@ function ProviderBody(
     controller.current = new AbortController();
     update({ status: "running", error: undefined });
     try {
-      await state.flushPendingSave();
+      const revision = await state.flushPendingSave();
+      const executionSnapshot = await currentExecutionSnapshot(node.id, revision);
       const result = await dispatchAppNodeExecution(
         canonicalNodeRegistry.forKind(kind),
         graph,
         {
           signal: controller.current.signal,
           inputs: runtimeInputs(node.id, kind),
+          connectedInputPorts: connectedInputPortIds(state.edges, node.id),
           services: {
             execution: {
               projectId,
@@ -201,7 +207,15 @@ function ProviderBody(
       const providerPersisted =
         result.metadata?.persisted === true &&
         typeof result.metadata.resultId === "string";
-      let stored: Awaited<ReturnType<typeof storeLibraryResult>> | undefined;
+      const batchOutput = result.outputs.texts;
+      const variantValues = batchOutput?.kind === "list"
+        ? batchOutput.items.flatMap((item) => item.type === "text" ? [item.value] : [])
+        : [value];
+      const providerVariants: Record<string, unknown>[] = Array.isArray(result.metadata?.results)
+        ? result.metadata.results.flatMap((item) => item && typeof item === "object" && !Array.isArray(item) ? [item as Record<string, unknown>] : [])
+        : [];
+      const groupRunId = crypto.randomUUID();
+      const storedVariants: Awaited<ReturnType<typeof storeLibraryResult>>[] = [];
       let paidResult:
         | Awaited<ReturnType<typeof storePaidBrandResult>>
         | undefined;
@@ -212,34 +226,115 @@ function ProviderBody(
         outputMode: String(result.metadata?.outputMode ?? node.data.outputMode ?? "single"),
         variants: Number(result.metadata?.variants ?? node.data.variantCount ?? 1),
       };
-      if (value && isDesktopRuntime() && !providerPersisted && !options.paidResult)
-        stored = await storeLibraryResult({
-          projectId,
-          nodeId: node.id,
-          model: persistedModel,
-          kind: "text",
-          text: value,
-          costMicrounits: typeof result.metadata?.costMicrounits === "number" ? Number(result.metadata.costMicrounits) : undefined,
-          prompt: persistedPrompt || undefined,
-          parameters: persistedParameters,
-        });
+      const outputValues = Object.fromEntries(
+        Object.entries(result.outputs).map(([key, item]) => [
+          key,
+          outputDisplayValue(item),
+        ]),
+      );
+      if (value && isDesktopRuntime() && !providerPersisted && !options.paidResult) {
+        const totalCost = typeof result.metadata?.costMicrounits === "number"
+          ? Number(result.metadata.costMicrounits)
+          : undefined;
+        for (const step of providerVariantPersistencePlan(variantValues.length, totalCost)) {
+          const index = step.index;
+          const variant = variantValues[index];
+          const providerCost = Number(providerVariants[index]?.costMicrounits);
+          storedVariants[index] = await storeLibraryResult({
+            runId: groupRunId,
+            projectId,
+            nodeId: node.id,
+            model: persistedModel,
+            kind: "text",
+            text: variant,
+            costMicrounits: step.costMicrounits,
+            prompt: persistedPrompt || undefined,
+            parameters: {
+              ...persistedParameters,
+              groupRunId,
+              variantIndex: index,
+              variantCount: variantValues.length,
+              ...(Number.isFinite(providerCost)
+                ? { variantCostMicrounits: providerCost }
+                : {}),
+            },
+            ...(step.activate
+              ? { expectedRevision: revision, inputFingerprint: executionSnapshot }
+              : {}),
+          });
+        }
+      }
+      const stored = storedVariants[0];
       if (options.paidResult && isDesktopRuntime())
         paidResult = await storePaidBrandResult({
           runId: crypto.randomUUID(),
           projectId,
           nodeId: node.id,
           model: String(node.data.model ?? "local"),
-          kind: `module-${kind}`,
+          kind: paidBrandResultKind(kind),
           text: value,
           costMicrounits: Number(result.metadata?.costMicrounits),
-          parameters: (result.metadata ?? {}) as Record<string, unknown>,
+          parameters: {
+            ...(result.metadata ?? {}),
+            executionFingerprint: executionSnapshot.executionFingerprint,
+            inputFingerprint: executionSnapshot,
+            brandOutputPorts: paidBrandOutputSnapshot(kind, outputValues),
+          } as Record<string, unknown>,
         });
-      const outputValues = Object.fromEntries(
-        Object.entries(result.outputs).map(([key, item]) => [
-          key,
-          outputText(item),
-        ]),
-      );
+      const targetCurrent = providerResultTargetCurrent({
+        providerPersisted,
+        providerTargetCurrent:
+          typeof result.metadata?.targetCurrent === "boolean"
+            ? result.metadata.targetCurrent
+            : undefined,
+        paidTargetCurrent: paidResult?.targetCurrent,
+        libraryActive: stored?.active,
+      });
+      const completedHistory = variantValues.map((variant, index) => {
+        const storedVariant = storedVariants[index];
+        const providerVariant = providerVariants[index];
+        const variantCost = Number(providerVariant?.costMicrounits);
+        return {
+          id:
+            (typeof providerVariant?.resultId === "string" && providerVariant.resultId
+              ? providerVariant.resultId
+              : undefined) ??
+            (index === 0 && typeof result.metadata?.resultId === "string"
+              ? result.metadata.resultId
+              : undefined) ??
+            (index === 0 ? paidResult?.resultId : undefined) ??
+            storedVariant?.resultId ??
+            crypto.randomUUID(),
+          runId: storedVariant?.runId ?? (variantValues.length > 1 ? groupRunId : undefined),
+          createdAt: storedVariant?.createdAt ?? new Date().toISOString(),
+          value: variant,
+          cost: Number.isFinite(variantCost) ? variantCost / 1_000_000 : index === 0 ? cost : 0,
+          model: persistedModel,
+          prompt: persistedPrompt || undefined,
+          parameters: {
+            ...persistedParameters,
+            ...(variantValues.length > 1 ? { groupRunId, variantIndex: index, variantCount: variantValues.length } : {}),
+          },
+          persisted:
+            providerPersisted ||
+            Boolean(storedVariant) ||
+            Boolean(paidResult?.persisted),
+          active: index === 0 && targetCurrent,
+        };
+      });
+      if (!targetCurrent) {
+        update({
+          status: "stale",
+          cost,
+          persisted: completedHistory.some((item) => item.persisted),
+          error: appErrorMessage(
+            "project_changed",
+            "Das Ergebnis wurde sicher gespeichert, aber nicht aktiviert.",
+          ),
+          history: [...completedHistory, ...(node.data.history ?? [])],
+        });
+        return;
+      }
       update({
         status: "fresh",
         value,
@@ -253,26 +348,7 @@ function ProviderBody(
         cost,
         error: undefined,
         history: [
-          {
-            id:
-              (typeof result.metadata?.resultId === "string"
-                ? result.metadata.resultId
-                : undefined) ??
-              paidResult?.resultId ??
-              stored?.resultId ??
-              crypto.randomUUID(),
-            createdAt: stored?.createdAt ?? new Date().toISOString(),
-            value,
-            cost,
-            model: persistedModel,
-            prompt: persistedPrompt || undefined,
-            parameters: persistedParameters,
-            persisted:
-              providerPersisted ||
-              Boolean(stored) ||
-              Boolean(paidResult?.persisted),
-            active: true,
-          },
+          ...completedHistory,
           ...(node.data.history ?? []).map((item) => ({
             ...item,
             active: false,
@@ -316,6 +392,7 @@ function ProviderBody(
     node.data.promise,
     node.data.personality,
     node.data.handle,
+    passiveSource,
   ]);
   return (
     <ModuleNodeFrame node={node} selected={props.selected}>
@@ -343,14 +420,13 @@ function ProviderBody(
           )}
         </button>
       ) : null}
-      {node.data.status === "running" ? (
-        <LoaderCircle className="spin" size={14} />
+      {node.data.value ? (
+        <InlineOutputPreview
+          kind="text"
+          value={String(node.data.value)}
+          renderContent={options.renderResult ? () => options.renderResult!(String(node.data.value)) : undefined}
+        />
       ) : null}
-      {node.data.value
-        ? options.renderResult?.(String(node.data.value)) ?? (
-            <DeferredMarkdown value={String(node.data.value)} />
-          )
-        : null}
     </ModuleNodeFrame>
   );
 }

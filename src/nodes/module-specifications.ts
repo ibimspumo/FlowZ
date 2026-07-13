@@ -7,6 +7,17 @@ import {
 } from "./context";
 import { transcriptionModule } from "./ai";
 
+export const BRAND_ARTIFACTS = {
+  brief: "flowz.brand-brief",
+  audience: "flowz.audience-analysis",
+  names: "flowz.name-candidate-list",
+  domains: "flowz.domain-availability",
+  handles: "flowz.handle-plan",
+  fonts: "flowz.font-pairing",
+  palette: "flowz.color-palette",
+  artboard: "flowz.artboard-reference",
+} as const;
+
 function portType(port: {
   valueType: { kind: string; scalar?: string; item?: string };
 }) {
@@ -157,20 +168,6 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
         id: "textLists",
         label: "Varianten",
         type: "textList",
-        optional: true,
-        multiple: true,
-      },
-      {
-        id: "image",
-        label: "Bild",
-        type: "image",
-        optional: true,
-        multiple: true,
-      },
-      {
-        id: "imageLists",
-        label: "Bildliste",
-        type: "imageList",
         optional: true,
         multiple: true,
       },
@@ -417,7 +414,7 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
     description: "Kompakte, editierbare Markenbasis",
     category: "Marke",
     inputs: [],
-    outputs: [{ id: "brief", label: "Briefing", type: "json" }],
+    outputs: [{ id: "brief", label: "Briefing", type: "json", artifact: BRAND_ARTIFACTS.brief }],
     defaults: {
       brandName: "",
       offer: "",
@@ -435,7 +432,7 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
     description: "Erkenntnisse und Annahmen sauber trennen",
     category: "Marke",
     inputs: [
-      { id: "brief", label: "Briefing", type: "json" },
+      { id: "brief", label: "Briefing", type: "json", artifact: BRAND_ARTIFACTS.brief },
       {
         id: "research",
         label: "Recherche",
@@ -444,7 +441,7 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
         multiple: true,
       },
     ],
-    outputs: [{ id: "audience", label: "Zielgruppe", type: "json" }],
+    outputs: [{ id: "audience", label: "Zielgruppe", type: "json", artifact: BRAND_ARTIFACTS.audience }],
     defaults: { model: "google/gemini-3.5-flash", prompt: "" },
   },
   brandNames: {
@@ -453,10 +450,10 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
     description: "Strukturierte Kandidaten mit stabilen IDs",
     category: "Marke",
     inputs: [
-      { id: "brief", label: "Briefing", type: "json" },
-      { id: "audience", label: "Zielgruppe", type: "json", optional: true },
+      { id: "brief", label: "Briefing", type: "json", artifact: BRAND_ARTIFACTS.brief },
+      { id: "audience", label: "Zielgruppe", type: "json", artifact: BRAND_ARTIFACTS.audience, optional: true },
     ],
-    outputs: [{ id: "names", label: "Namensartefakt", type: "json" }],
+    outputs: [{ id: "names", label: "Namensartefakt", type: "json", artifact: BRAND_ARTIFACTS.names }],
     defaults: {
       model: "google/gemini-3.5-flash",
       candidateCount: 8,
@@ -474,10 +471,11 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
         id: "names",
         label: "Namensartefakt",
         type: "json",
+        artifact: BRAND_ARTIFACTS.names,
         optional: true,
       },
     ],
-    outputs: [{ id: "domains", label: "Domainstatus", type: "json" }],
+    outputs: [{ id: "domains", label: "Domainstatus", type: "json", artifact: BRAND_ARTIFACTS.domains }],
     defaults: {
       tlds: [
         "com",
@@ -512,9 +510,9 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
     description: "Syntax und offizielle manuelle Prüfpfade",
     category: "Marke",
     inputs: [
-      { id: "names", label: "Namensartefakt", type: "json", optional: true },
+      { id: "names", label: "Namensartefakt", type: "json", artifact: BRAND_ARTIFACTS.names, optional: true },
     ],
-    outputs: [{ id: "handles", label: "Handle-Plan", type: "json" }],
+    outputs: [{ id: "handles", label: "Handle-Plan", type: "json", artifact: BRAND_ARTIFACTS.handles }],
     defaults: { handle: "", selectedNameId: "" },
   },
   fontPairing: {
@@ -523,11 +521,11 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
     description: "Google Fonts mit Quelle und Lizenz",
     category: "Marke",
     inputs: [
-      { id: "brief", label: "Briefing", type: "json", optional: true },
-      { id: "audience", label: "Zielgruppe", type: "json", optional: true },
+      { id: "brief", label: "Briefing", type: "json", artifact: BRAND_ARTIFACTS.brief, optional: true },
+      { id: "audience", label: "Zielgruppe", type: "json", artifact: BRAND_ARTIFACTS.audience, optional: true },
     ],
     outputs: [
-      { id: "pairing", label: "Typografie", type: "json" },
+      { id: "pairing", label: "Typografie", type: "json", artifact: BRAND_ARTIFACTS.fonts },
       { id: "styleHint", label: "Stilhinweis", type: "text" },
     ],
     defaults: {
@@ -549,10 +547,10 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
     description: "Rollenbasierte sRGB-Farben mit WCAG-Kontrast",
     category: "Marke",
     inputs: [
-      { id: "brief", label: "Briefing", type: "json" },
-      { id: "audience", label: "Zielgruppe", type: "json", optional: true },
+      { id: "brief", label: "Briefing", type: "json", artifact: BRAND_ARTIFACTS.brief },
+      { id: "audience", label: "Zielgruppe", type: "json", artifact: BRAND_ARTIFACTS.audience, optional: true },
     ],
-    outputs: [{ id: "palette", label: "Farbpalette", type: "json" }],
+    outputs: [{ id: "palette", label: "Farbpalette", type: "json", artifact: BRAND_ARTIFACTS.palette }],
     defaults: { model: "google/gemini-3.5-flash", paletteDirection: "" },
   },
   logoDesign: {
@@ -561,9 +559,9 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
     description: "Transparente Logo-Varianten mit fal.ai",
     category: "Marke",
     inputs: [
-      { id: "brief", label: "Briefing", type: "json" },
-      { id: "audience", label: "Zielgruppe", type: "json", optional: true },
-      { id: "palette", label: "Farbpalette", type: "json", optional: true },
+      { id: "brief", label: "Briefing", type: "json", artifact: BRAND_ARTIFACTS.brief },
+      { id: "audience", label: "Zielgruppe", type: "json", artifact: BRAND_ARTIFACTS.audience, optional: true },
+      { id: "palette", label: "Farbpalette", type: "json", artifact: BRAND_ARTIFACTS.palette, optional: true },
       {
         id: "references",
         label: "Bild",
@@ -604,8 +602,8 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
     description: "Editierbare Social-Komposition",
     category: "Marke",
     inputs: [
-      { id: "palette", label: "Farbpalette", type: "json", optional: true },
-      { id: "fonts", label: "Typografie", type: "json", optional: true },
+      { id: "palette", label: "Farbpalette", type: "json", artifact: BRAND_ARTIFACTS.palette, optional: true },
+      { id: "fonts", label: "Typografie", type: "json", artifact: BRAND_ARTIFACTS.fonts, optional: true },
       {
         id: "images",
         label: "Bild",
@@ -613,9 +611,16 @@ export const nodeSpecifications: Record<NodeKind, NodeDefinition> = {
         optional: true,
         multiple: true,
       },
+      {
+        id: "imageLists",
+        label: "Bildliste",
+        type: "imageList",
+        optional: true,
+        multiple: true,
+      },
     ],
     outputs: [
-      { id: "artboard", label: "Artboard", type: "json" },
+      { id: "artboard", label: "Artboard", type: "json", artifact: BRAND_ARTIFACTS.artboard },
       { id: "image", label: "Aktives Bild", type: "image" },
       { id: "images", label: "Ausgewählte Bilder", type: "imageList" },
     ],

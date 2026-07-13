@@ -70,6 +70,12 @@ export function falVideoFamily(endpointOrFamily: string): string | undefined {
   return FAL_VIDEO_ENDPOINTS.find((item) => item.endpoint === endpointOrFamily || item.family === endpointOrFamily)?.family;
 }
 
+/** Family selection never rewrites duration, resolution or format. Those
+ * parameters remain user-owned and validation blocks incompatible runs. */
+export function selectFalVideoFamily(id: string): { model: string } | undefined {
+  return FAL_VIDEO_FAMILIES.some((family) => family.id === id) ? { model: id } : undefined;
+}
+
 /** Selects the exact audited endpoint from semantic, already-connected ports. */
 export function inferFalVideoEndpoint(family: string, occupied: FalVideoPortOccupancy): { endpoint?: FalVideoCapabilities; error?: string } {
   const candidates = FAL_VIDEO_ENDPOINTS.filter((item) => item.family === family);
@@ -91,6 +97,37 @@ export function defaultFalVideoConfig(capability: FalVideoCapabilities): FalVide
 }
 
 export type FalVideoPortOccupancy = { startFrame: number; endFrame: number; references: number };
+
+export function connectedFalVideoOccupancy(
+  materialized: FalVideoPortOccupancy,
+  connectedPorts: ReadonlySet<string>,
+): FalVideoPortOccupancy {
+  return {
+    startFrame: Math.max(materialized.startFrame, connectedPorts.has('startFrame') ? 1 : 0),
+    endFrame: Math.max(materialized.endFrame, connectedPorts.has('endFrame') ? 1 : 0),
+    references: Math.max(
+      materialized.references,
+      connectedPorts.has('references') || connectedPorts.has('referenceLists') ? 1 : 0,
+    ),
+  };
+}
+
+export function emptyConnectedFalVideoInputs(
+  materialized: FalVideoPortOccupancy,
+  connectedPorts: ReadonlySet<string>,
+): string[] {
+  const errors: string[] = [];
+  if (connectedPorts.has('startFrame') && materialized.startFrame === 0)
+    errors.push('Das verbundene Startbild besitzt noch kein Ergebnis.');
+  if (connectedPorts.has('endFrame') && materialized.endFrame === 0)
+    errors.push('Das verbundene Endbild besitzt noch kein Ergebnis.');
+  if (
+    (connectedPorts.has('references') || connectedPorts.has('referenceLists')) &&
+    materialized.references === 0
+  )
+    errors.push('Die verbundene Bildreferenz besitzt noch kein Ergebnis.');
+  return errors;
+}
 
 export function validateFalVideoConfig(capability: FalVideoCapabilities | undefined, config: FalVideoEndpointConfig, occupied: FalVideoPortOccupancy): string[] {
   if (!capability) return ['Dieser fal.ai-Endpoint besitzt keinen geprüften FlowZ-Adapter.'];

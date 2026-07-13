@@ -1,5 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { UpdatePolicy } from "./domain/project";
+import type { ArtifactIdentity } from "./domain/values";
 
 export type DataType =
   | "text"
@@ -333,10 +334,11 @@ export type NodeDefinition = {
     id: string;
     label: string;
     type: DataType;
+    artifact?: ArtifactIdentity;
     optional?: boolean;
     multiple?: boolean;
   }[];
-  outputs: { id: string; label: string; type: DataType }[];
+  outputs: { id: string; label: string; type: DataType; artifact?: ArtifactIdentity }[];
   defaults: Partial<FlowNodeData>;
   hidden?: boolean;
 };

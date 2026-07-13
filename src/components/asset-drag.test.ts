@@ -34,9 +34,9 @@ describe('asset drop compatibility', () => {
   it('maps kind and config without losing the version binding', () => {
     expect(assetDataType('prompt')).toBe('text');
     expect(assetNodeKind('image')).toBe('assetImage');
-    expect(assetNodeConfig(image)).toMatchObject({
+    expect(assetNodeConfig(image)).toEqual({
       libraryAssetId: 'asset-1', assetVersionId: 'version-1', assetVersion: 2,
-      assetKind: 'image', assetSourceProjectId: 'project-1',
+      assetName: 'Hero', assetKind: 'image',
     });
   });
 

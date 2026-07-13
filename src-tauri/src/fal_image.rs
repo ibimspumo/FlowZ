@@ -8,7 +8,6 @@ use futures_util::StreamExt;
 use reqwest::{header, Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs::OpenOptions,
@@ -1641,6 +1640,16 @@ fn target_current(request: &FalImageRequest, persistence: &Persistence) -> bool 
     if node.config.get("model").and_then(Value::as_str) != Some(request.model_id.as_str()) {
         return false;
     }
+    if !crate::execution_snapshot::matches(
+        &request.project_id,
+        &request.node_id,
+        &request.input_fingerprint,
+        persistence,
+        &["ai.image-generation", "brand.logo-design"],
+        Some(&request_contract),
+    ) {
+        return false;
+    }
     let Some(fingerprint) = snapshot
         .get("executionFingerprint")
         .and_then(Value::as_str)
@@ -1689,87 +1698,18 @@ fn target_current(request: &FalImageRequest, persistence: &Persistence) -> bool 
         {
             return false;
         }
-        let Some(source) = project
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.id == edge.source_node_id)
-        else {
-            return false;
-        };
-        let value = if source.module_id == "core.text-input" {
-            source.config.get("text").cloned().unwrap_or(Value::Null)
-        } else {
-            persistence
-                .database
-                .active_result_identity(&request.project_id, &source.id)
-                .ok()
-                .flatten()
-                .map(|(_, blob, text)| {
-                    blob.map(|hash| Value::String(format!("flowz-cas:{hash}")))
-                        .or_else(|| text.map(Value::String))
-                        .unwrap_or(Value::Null)
-                })
-                .or_else(|| source.config.get("blobHash").cloned())
-                .unwrap_or(Value::Null)
-        };
-        if input.get("value") != Some(&value) {
-            return false;
-        }
     }
     actual_edges
         .iter()
         .zip(expected_edges)
         .all(|(edge, expected)| {
-            if expected.get("sourceNodeId").and_then(Value::as_str)
-                != Some(edge.source_node_id.as_str())
-                || expected.get("sourcePortId").and_then(Value::as_str)
-                    != Some(edge.source_port_id.as_str())
-                || expected.get("targetPortId").and_then(Value::as_str)
-                    != Some(edge.target_port_id.as_str())
-                || expected.get("order").and_then(Value::as_u64) != Some(edge.order)
-            {
-                return false;
-            }
-            let Some(source) = project
-                .graph
-                .nodes
-                .iter()
-                .find(|node| node.id == edge.source_node_id)
-            else {
-                return false;
-            };
-            let expected_identity = expected
-                .get("identity")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let actual_identity = if source.module_id == "core.text-input" {
-                source
-                    .config
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .map(|text| format!("text-sha256:{:x}", Sha256::digest(text.as_bytes())))
-            } else if expected_identity == "config" {
-                if expected.get("sourceConfig") != Some(&Value::Object(source.config.clone())) {
-                    return false;
-                }
-                Some("config".into())
-            } else {
-                persistence
-                    .database
-                    .active_result_identity(&request.project_id, &source.id)
-                    .ok()
-                    .flatten()
-                    .map(|(result_id, blob, _)| {
-                        if expected_identity.starts_with("blob:") {
-                            blob.map(|hash| format!("blob:{hash}"))
-                                .unwrap_or_else(|| format!("result:{result_id}"))
-                        } else {
-                            format!("result:{result_id}")
-                        }
-                    })
-            };
-            Some(expected_identity) == actual_identity.as_deref()
+            expected.get("sourceNodeId").and_then(Value::as_str)
+                == Some(edge.source_node_id.as_str())
+                && expected.get("sourcePortId").and_then(Value::as_str)
+                    == Some(edge.source_port_id.as_str())
+                && expected.get("targetPortId").and_then(Value::as_str)
+                    == Some(edge.target_port_id.as_str())
+                && expected.get("order").and_then(Value::as_u64) == Some(edge.order)
         })
 }
 
@@ -2444,23 +2384,23 @@ mod tests {
         });
         project.graph.nodes.push(GraphNode {
             id: "source".into(),
-            module_id: "core.text-input".into(),
+            module_id: "brand.brief".into(),
             module_version: 1,
             position: CanvasPosition { x: 0.0, y: 0.0 },
             label: None,
             label_id: None,
-            config: serde_json::from_value(json!({"text":"Brief"})).unwrap(),
+            config: serde_json::from_value(json!({"content":"Brief"})).unwrap(),
             update_policy: UpdatePolicy::Manual,
         });
         project.graph.edges.push(GraphEdge {
             id: "edge".into(),
             source_node_id: "source".into(),
-            source_port_id: "text".into(),
+            source_port_id: "brief".into(),
             target_node_id: "logo".into(),
             target_port_id: "brief".into(),
             order: 0,
         });
-        persistence
+        let saved = persistence
             .projects
             .save(SaveProjectRequest {
                 project: project.clone(),
@@ -2476,9 +2416,8 @@ mod tests {
         request.project_id = project.id.clone();
         request.node_id = "logo".into();
         let contract = json!({"modelId":request.model_id,"endpoint":request.endpoint,"schemaHash":request.schema_hash,"prompt":request.prompt,"references":request.references,"mask":request.mask,"config":request.config,"streaming":request.streaming});
-        let execution=json!({"moduleId":"brand.logo-design","moduleVersion":1,"config":config,"inputs":[{"sourceNodeId":"source","sourcePortId":"text","targetPortId":"brief","order":0,"value":"Brief"}]}).to_string();
-        let identity = format!("text-sha256:{:x}", Sha256::digest(b"Brief"));
-        request.input_fingerprint = json!({"moduleId":"brand.logo-design","moduleVersion":1,"nodeConfig":config,"connections":[{"sourceNodeId":"source","sourcePortId":"text","targetPortId":"brief","order":0,"identity":identity}],"executionFingerprint":execution,"requestContract":contract});
+        let execution=json!({"moduleId":"brand.logo-design","moduleVersion":1,"config":config,"inputs":[{"sourceNodeId":"source","sourcePortId":"brief","targetPortId":"brief","order":0,"value":"Brief"}]}).to_string();
+        request.input_fingerprint = json!({"moduleId":"brand.logo-design","moduleVersion":1,"nodeConfig":config,"connections":[{"sourceNodeId":"source","sourcePortId":"brief","targetPortId":"brief","order":0,"identity":"config","sourceConfig":{"content":"Brief"}}],"executionFingerprint":execution,"projectRevision":saved.revision,"requestContract":contract});
         assert!(target_current(&request, &persistence));
         let mut wrong_request = request.clone();
         wrong_request.endpoint = "fal-ai/gpt-image-1.5/edit".into();
@@ -2502,7 +2441,7 @@ mod tests {
         source_changed.graph.nodes[0].config = config.clone();
         source_changed.graph.nodes[1]
             .config
-            .insert("text".into(), Value::String("Geändert".into()));
+            .insert("content".into(), Value::String("Geändert".into()));
         let source_changed = persistence
             .projects
             .save(SaveProjectRequest {
@@ -2515,7 +2454,7 @@ mod tests {
         let mut switched = source_changed.project;
         switched.graph.nodes[1]
             .config
-            .insert("text".into(), Value::String("Brief".into()));
+            .insert("content".into(), Value::String("Brief".into()));
         switched.graph.nodes[0].module_id = "ai.image-generation".into();
         let switched = persistence
             .projects

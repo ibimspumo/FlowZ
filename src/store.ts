@@ -1,6 +1,6 @@
 import { applyEdgeChanges, applyNodeChanges, type Connection, type EdgeChange, type NodeChange, type Viewport, type XYPosition } from '@xyflow/react';
 import { create } from 'zustand';
-import { configPatchFor, connectionCreatesCycle, edgeToFlow, flowEdgeToGraph, kindForModule, moduleForKind, nextInputOrder, nodeToFlow, portType, removedEdgeIds, structuralNodeChanges, type RuntimeDisplay } from './app/adapters';
+import { configPatchFor, connectionCreatesCycle, edgeToFlow, flowEdgeToGraph, kindForModule, moduleForKind, nextInputOrder, nodeToFlow, portValueType, removedEdgeIds, structuralNodeChanges, type RuntimeDisplay } from './app/adapters';
 import { CURRENT_SCHEMA_VERSION, microUnits, migrateV1ToV2, type GraphNode, type LegacyImportBundle, type ProjectDocument, type RuntimeValue, type UpdatePolicy } from './domain';
 import { inferMediaPlayable } from './domain/media-config';
 import { CommandBus } from './state/command-bus';
@@ -19,6 +19,8 @@ import { deleteLibraryResult, setActiveLibraryResult } from './persistence/libra
 import { artboardNodeOutputs } from './artboard-workspace/node-reference';
 import { mediaUrl } from './persistence/media';
 import { DIRECT_MEDIA_TARGETS, isDirectMediaBinding, type DirectMediaBinding } from './nodes/direct-media';
+import { areValueTypesCompatible } from './engine/compatibility';
+import { hydratePaidBrandOutputs, PAID_BRAND_FINGERPRINTED_MODULES } from './nodes/provider-persistence';
 
 const LEGACY_STORAGE_KEY = 'flowz-project-v1';
 const LEGACY_IMPORTED_KEY = 'flowz-project-v1-imported';
@@ -47,6 +49,10 @@ function freshId() { return crypto.randomUUID(); }
 function runtimeNodeId(projectId: string, nodeId: string) { return `${projectId}\0${nodeId}`; }
 function activeRunKey(projectId: string, nodeId: string) { return `${projectId}\0${nodeId}`; }
 function isAssetModule(moduleId: string) { return moduleId === 'library.asset-text' || moduleId === 'library.asset-image'; }
+const CAS_HASH = /^[a-f0-9]{64}$/i;
+export function casReference(blobHash?: string): string | undefined {
+  return blobHash && CAS_HASH.test(blobHash) ? `flowz-cas:${blobHash.toLowerCase()}` : undefined;
+}
 export function persistedMedia(result: Awaited<ReturnType<typeof loadProjectResults>>[number]) {
   const kind = result.mediaType?.startsWith('video/') ? 'video' : result.mediaType?.startsWith('audio/') ? 'audio' : undefined;
   const parameters = result.parameters; const durationSeconds = Number(parameters?.durationSeconds);
@@ -56,7 +62,7 @@ export function persistedMedia(result: Awaited<ReturnType<typeof loadProjectResu
   const codecs = String(parameters?.codecs ?? '').split(' + ').filter(Boolean);
   const playable = typeof parameters?.playable === 'boolean' ? parameters.playable : inferMediaPlayable(container, codecs);
   return {
-    value: result.blobHash, blobHash: result.blobHash, mediaType: result.mediaType,
+    value: mediaUrl(result.blobHash), blobHash: result.blobHash, mediaType: result.mediaType,
     fileName: typeof parameters?.fileName === 'string' ? parameters.fileName : undefined,
     posterHash: typeof parameters?.posterHash === 'string' ? parameters.posterHash : undefined,
     startFrameHash: typeof parameters?.startFrameHash === 'string' ? parameters.startFrameHash : undefined,
@@ -216,7 +222,8 @@ function validatedConnection(document: ProjectDocument, connection: Connection, 
   const sourceKind = kindForModule(source.moduleId); const targetKind = kindForModule(target.moduleId);
   if (!sourceKind || !targetKind) return;
   const targetPort = connection.targetHandle.split('::')[0];
-  if (portType(sourceKind, 'output', connection.sourceHandle) !== portType(targetKind, 'input', targetPort)) return;
+  const outputValueType=portValueType(sourceKind,'output',connection.sourceHandle),inputValueType=portValueType(targetKind,'input',targetPort);
+  if (!outputValueType || !inputValueType || !areValueTypesCompatible(outputValueType,inputValueType)) return;
   const input = registry[targetKind].inputs.find((item) => item.id === targetPort);
   if (!input) return;
   const occupied = document.graph.edges.some((edge) => edge.id !== replacingEdgeId && edge.targetNodeId === target.id && edge.targetPortId === targetPort);
@@ -279,6 +286,7 @@ async function hydratePersistedResults(
   const orderedResults = [...results].sort((left, right) => Number(right.active) - Number(left.active));
   for (const result of orderedResults) {
     const graphNode=get().document?.graph.nodes.find((node)=>node.id===result.nodeId);if(!graphNode)continue;
+    const paidBrandOutputs = hydratePaidBrandOutputs(result.kind, result.textValue, result.parameters);
     const value = result.kind === 'webpage' ? result.textValue : result.dataUrl ?? result.textValue;
     const deferredMedia = Boolean(result.blobHash && result.mediaType);
     if (!value && !deferredMedia) continue;
@@ -287,7 +295,12 @@ async function hydratePersistedResults(
     const rawCostProvenance = result.parameters?.costProvenance;
     const costProvenance: 'actual'|'estimated'|'unknown'|undefined = rawCostProvenance === 'actual' || rawCostProvenance === 'estimated' || rawCostProvenance === 'unknown' ? rawCostProvenance : undefined;
     const activeMedia = result.active ? persistedMedia(result) : undefined;
-    const activeImageOutput = result.active && result.blobHash && result.mediaType?.startsWith('image/') ? { image: `flowz-cas:${result.blobHash}` } : undefined;
+    const activeImageReference = result.active && result.mediaType?.startsWith('image/') ? casReference(result.blobHash) : undefined;
+    const activeImageOutput = activeImageReference ? { image: activeImageReference } : undefined;
+    const screenshotReference = result.kind === 'webpage' && result.mediaType?.startsWith('image/') ? casReference(result.blobHash) : undefined;
+    const webpageOutputs = result.kind === 'webpage'
+      ? { text: result.textValue, ...(screenshotReference ? { image: screenshotReference, screenshot: screenshotReference } : {}) }
+      : undefined;
     const history = [...(previous?.history ?? []), {
       id: result.resultId, createdAt: result.createdAt, value: value ?? '',
       runId: String(listRunParameters(result.parameters)?.groupRunId ?? result.runId), costRunId: result.runId,
@@ -300,13 +313,13 @@ async function hydratePersistedResults(
       ...(result.assetId ? { assetId: result.assetId } : {}),
       ...(result.blobHash ? { blobHash: result.blobHash } : {}),
       ...(result.mediaType ? { mediaType: result.mediaType } : {}),
-      ...(result.kind === 'webpage' ? { outputValues: { text: result.textValue, ...(result.dataUrl ? { image: result.dataUrl, screenshot: result.dataUrl } : {}) } } : activeImageOutput ? { outputValues: activeImageOutput } : {}),
+      ...(webpageOutputs ? { outputValues: webpageOutputs } : activeImageOutput ? { outputValues: activeImageOutput } : paidBrandOutputs ? { outputValues: paidBrandOutputs.outputValues } : {}),
       persisted: true,
       active: result.active,
     }];
     next.set(result.nodeId, activeMedia ? { ...previous, ...activeMedia, status: 'fresh', persisted: true, assetId: result.assetId, history } : previous?.status === 'fresh' || !result.active || !value ? { ...previous, history } : {
       ...previous, status: 'fresh', value, cost: result.costMicrounits == null ? previous?.cost : result.costMicrounits / 1_000_000, ...(costProvenance ? { costProvenance } : {}),
-      ...(result.kind === 'webpage' ? { outputValues: { text: result.textValue, ...(result.dataUrl ? { image: result.dataUrl, screenshot: result.dataUrl } : {}) } } : activeImageOutput ? { outputValues: activeImageOutput, blobHash: result.blobHash, mediaType: result.mediaType } : {}),
+      ...(webpageOutputs ? { outputValues: webpageOutputs } : activeImageOutput ? { outputValues: activeImageOutput, blobHash: result.blobHash, mediaType: result.mediaType } : paidBrandOutputs ? { outputValues: paidBrandOutputs.outputValues } : {}),
       history, fileName: previous?.fileName, assetId: result.assetId, persisted: true,
     });
   }
@@ -322,14 +335,25 @@ async function hydratePersistedResults(
     if (!materializedIds.length) continue;
     const loaded = await Promise.all(materializedIds.map(async (resultId) => {try{return { resultId, dataUrl: await loadLibraryResultData(projectId, resultId) };}catch{return {resultId,dataUrl:undefined,error:true};}}));
     if (get().document?.id !== projectId) return;
-    const values = new Map(loaded.filter((item): item is { resultId: string; dataUrl: string } => Boolean(item.dataUrl)).map((item) => [item.resultId, item.dataUrl]));
-    const previous = next.get(node.id); const history = previous?.history?.map((item) => values.has(item.id) ? { ...item, value: values.get(item.id)! } : item);
+    const previews = new Map(loaded.filter((item): item is { resultId: string; dataUrl: string } => Boolean(item.dataUrl)).map((item) => [item.resultId, item.dataUrl]));
+    const references = new Map(materializedIds.flatMap((resultId) => {
+      const result = resultMetadata.get(resultId);
+      const reference = result?.mediaType?.startsWith('image/') ? casReference(result.blobHash) : undefined;
+      return reference ? [[resultId, reference] as const] : [];
+    }));
+    const previous = next.get(node.id); const history = previous?.history?.map((item) => previews.has(item.id) ? { ...item, value: previews.get(item.id)! } : item);
     const outputValues: Record<string, string | string[] | undefined> = { ...(previous?.outputValues ?? {}) };
-    if (typeof previous?.value === 'string') outputValues.image = previous.value;
-    if (activeRunIds.length > 1) outputValues.images = activeRunIds.flatMap((resultId) => values.get(resultId) ?? []);
+    const activeReference = active ? references.get(active.resultId) : undefined;
+    if (activeReference) outputValues.image = activeReference;
+    else delete outputValues.image;
+    if (activeRunIds.length > 1) outputValues.images = activeRunIds.flatMap((resultId) => references.get(resultId) ?? []);
     else delete outputValues.images;
-    for (const resultId of fanOutIds) outputValues[`variant:${resultId}`] = values.get(resultId);
-    const totalCost = groupRunId ? activeRunIds.reduce((sum, resultId) => sum + (resultMetadata.get(resultId)?.costMicrounits ?? 0), 0) / 1_000_000 : previous?.cost;
+    for (const resultId of fanOutIds) {
+      const reference = references.get(resultId);
+      if (reference) outputValues[`variant:${resultId}`] = reference;
+      else delete outputValues[`variant:${resultId}`];
+    }
+    const totalCost = groupRunId && active ? (active.costMicrounits ?? 0) / 1_000_000 : previous?.cost;
     next.set(node.id, { ...previous, history, outputValues, cost: totalCost, ...(loaded.some((item)=>'error' in item)?{status:'error' as const,error:'Mindestens ein gespeichertes Bild ist im lokalen CAS nicht lesbar.'}:{}) });
   }
   // Text variants and Map runs share one run identity. Rebuild the ordered typed
@@ -342,8 +366,8 @@ async function hydratePersistedResults(
     const run = results.filter((result) => result.nodeId === node.id && typeof result.textValue === 'string' && (groupRunId ? listRunParameters(result.parameters)?.groupRunId === groupRunId : result.runId === active.runId))
       .sort(compareVariantOrder);
     const previous = next.get(node.id); const texts = run.map((result) => result.textValue!);
-    const expected = Number(listRunParameters(active.parameters)?.listCount ?? active.parameters?.listCount ?? run.length); const partial = Number.isFinite(expected) && expected > run.length;
-    const totalCost = run.reduce((sum, result) => sum + (result.costMicrounits ?? 0), 0) / 1_000_000;
+    const expected = Number(listRunParameters(active.parameters)?.variantCount ?? active.parameters?.variantCount ?? run.length); const partial = Number.isFinite(expected) && expected > run.length;
+    const totalCost = (active.costMicrounits ?? 0) / 1_000_000;
     const previousOutputs = { ...(previous?.outputValues ?? {}) }; delete previousOutputs.texts;
     next.set(node.id, { ...previous, status: partial ? 'error' : previous?.status, error: partial ? `${run.length}/${expected} Varianten sind gespeichert. Beim nächsten Lauf werden nur fehlende Ergebnisse wiederholt.` : previous?.error, cost: totalCost, outputValues: { ...previousOutputs, text: active.textValue, ...(texts.length > 1 ? { texts } : {}) } });
   }
@@ -379,13 +403,13 @@ async function hydratePersistedResults(
       ? node.config.collectionResultIds.filter((value): value is string => typeof value === 'string') : [];
     const loaded = await Promise.all(resultIds.map(async (resultId) => {
       const result = resultMetadata.get(resultId); const dataUrl = await loadLibraryResultData(projectId, resultId).catch(()=>undefined);
-      if (!result || !dataUrl) return;
+      if (!result || !dataUrl || !result.mediaType?.startsWith('image/') || !casReference(result.blobHash)) return;
       return { id: resultId, runId: result.runId, createdAt: result.createdAt, value: dataUrl, assetId: result.assetId, blobHash: result.blobHash, mediaType: result.mediaType, persisted: true } satisfies ImageCollectionItem;
     }));
     if (get().document?.id !== projectId) return;
     const items = loaded.filter(Boolean) as ImageCollectionItem[];
-    const outputValues: Record<string, string | string[]> = { images: items.map((item) => item.value) };
-    for (const item of items) outputValues[`variant:${item.id}`] = item.value;
+    const outputValues: Record<string, string | string[]> = { images: items.map((item) => casReference(item.blobHash)!) };
+    for (const item of items) outputValues[`variant:${item.id}`] = casReference(item.blobHash)!;
     const complete = items.length === resultIds.length;
     next.set(node.id, { status: complete && items.length ? 'fresh' : 'error', value: items[0]?.value, persisted: true, collectionItems: items, outputValues, ...(!complete ? { error: `${resultIds.length-items.length}/${resultIds.length} kuratierte Bilder fehlen.` } : items.length ? {} : { error: 'Die gespeicherte Bildauswahl ist nicht mehr verfügbar.' }) });
   }
@@ -415,13 +439,25 @@ async function hydratePersistedResults(
         next.set(node.id, { status: 'error', error: 'Die gebundene Asset-Version ist nicht mehr verfügbar.' });
         continue;
       }
-      const value = payload.kind === 'image' ? payload.dataUrl : payload.text;
-      if (value) next.set(node.id, { status: 'fresh', value, persisted: true, assetId: payload.assetId, outputValues: payload.kind === 'image' ? { image: value } : { text: value } });
+      if (payload.kind === 'image') {
+        const reference = casReference(payload.blobHash);
+        if (!reference) {
+          next.set(node.id, { status: 'error', error: 'Die gebundene Bild-Asset-Version hat keine gültige lokale CAS-Referenz.' });
+          continue;
+        }
+        next.set(node.id, {
+          status: 'fresh', value: payload.dataUrl ?? mediaUrl(payload.blobHash!), persisted: true,
+          assetId: payload.assetId, blobHash: payload.blobHash, mediaType: payload.mediaType,
+          outputValues: { image: reference },
+        });
+      } else if (payload.text) {
+        next.set(node.id, { status: 'fresh', value: payload.text, persisted: true, assetId: payload.assetId, outputValues: { text: payload.text } });
+      }
     }
   }
   const document = get().document!;
   const activeByNode = new Map(results.filter((result) => result.active).map((result) => [result.nodeId, result]));
-  const fingerprintedModules = new Set(['ai.text-generation','ai.image-generation','image.upscale','image.transform','image.trim-transparent','image.background-removal','ai.video-generation','media.video-frame','ai.image-analysis','ai.transcription','context.webpage','context.research']);
+  const fingerprintedModules = new Set(['ai.text-generation','ai.image-generation','image.upscale','image.transform','image.trim-transparent','image.background-removal','ai.video-generation','media.video-frame','ai.image-analysis','ai.transcription','context.webpage','context.research',...PAID_BRAND_FINGERPRINTED_MODULES]);
   for (const node of document.graph.nodes) {
     const result = activeByNode.get(node.id);
     if (!result || !fingerprintedModules.has(node.moduleId)) continue;

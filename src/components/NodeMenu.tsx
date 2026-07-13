@@ -6,12 +6,15 @@ import { closeActiveSelect } from './select-coordinator';
 import { canvasTemplates, type CanvasTemplate } from '../templates';
 import { localizeTemplateMeta, useI18n } from '../i18n';
 import { localizedCategory, localizedNodeDescription, localizedNodeLabel } from '../i18n-schema';
+import type { ArtifactIdentity } from '../domain/values';
+import { areProductPortsCompatible } from '../engine/compatibility';
 
 export type PendingConnection = {
   nodeId: string;
   handleId: string;
   handleType: 'source' | 'target';
   dataType: DataType;
+  artifact?: ArtifactIdentity;
 };
 
 export type NodeMenuState = {
@@ -24,8 +27,8 @@ export type NodeMenuState = {
 function accepts(definition: NodeDefinition, pending?: PendingConnection) {
   if (!pending) return true;
   return pending.handleType === 'source'
-    ? definition.inputs.some((input) => input.type === pending.dataType)
-    : definition.outputs.some((output) => output.type === pending.dataType);
+    ? definition.inputs.some((input) => areProductPortsCompatible({type:pending.dataType,...(pending.artifact?{artifact:pending.artifact}:{})},input))
+    : definition.outputs.some((output) => areProductPortsCompatible(output,{type:pending.dataType,...(pending.artifact?{artifact:pending.artifact}:{})}));
 }
 
 const PROVIDER_NODES = new Set<NodeKind>(['textGeneration','imageGeneration','imageUpscale','backgroundRemoval','videoGeneration','imageAnalysis','transcription','research','audienceAnalysis','brandNames','fontPairing','colorPalette','logoDesign']);

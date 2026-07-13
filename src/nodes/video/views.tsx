@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import type { JsonValue } from "../../domain/project";
 import type { NodeViewProps } from "../../engine/node-module";
 import { CustomSelect } from "../../components/CustomSelect";
@@ -6,10 +5,13 @@ import { useFlowStore } from "../../store";
 import { formatAspectRatioLabel } from "../image/capabilities";
 import {
   FAL_VIDEO_FAMILIES,
+  connectedFalVideoOccupancy,
+  emptyConnectedFalVideoInputs,
   type FalVideoEndpointConfig,
-  defaultFalVideoConfig,
   falVideoFamily,
   inferFalVideoEndpoint,
+  selectFalVideoFamily,
+  validateFalVideoConfig,
 } from "./capabilities";
 import {
   FalCostEstimateView,
@@ -22,6 +24,8 @@ import {
 import { estimateFalVideoCost, falVideoCostContext } from "../fal-pricing";
 import { useFalCostDisplay } from "../use-fal-cost-display";
 import { useI18n } from "../../i18n";
+import { InlineOutputPreview } from "../../components/InlineOutputPreview";
+import { connectedInputPortIds } from "../direct-media";
 
 export function FalVideoGenerationBody(
   props: NodeViewProps<Record<string, JsonValue>>,
@@ -31,14 +35,15 @@ export function FalVideoGenerationBody(
     edges = useFlowStore((state) => state.edges),
     inputs = useFlowStore((state) => state.inputsForPort),
     { t } = useI18n();
-  void edges;
-  const occupancy = {
+  const materialized = {
     startFrame: inputs(node.id, "startFrame").length,
     endFrame: inputs(node.id, "endFrame").length,
     references:
       inputs(node.id, "references").length +
       inputs(node.id, "referenceLists").length,
   };
+  const connectedPorts = connectedInputPortIds(edges, node.id);
+  const occupancy = connectedFalVideoOccupancy(materialized, connectedPorts);
   const family =
     falVideoFamily(String(node.data.model ?? "")) ??
     String(node.data.model ?? "");
@@ -62,28 +67,12 @@ export function FalVideoGenerationBody(
       config: currentConfig,
       occupancy,
     });
+  const configurationErrors = [
+    ...emptyConnectedFalVideoInputs(materialized, connectedPorts),
+    ...validateFalVideoConfig(capability, currentConfig, occupancy),
+  ];
   const costContext = capability ? falVideoCostContext({ capability, config: currentConfig }) : undefined,
     estimate = useFalCostDisplay(officialEstimate, capability?.endpoint, capability?.schemaHash, costContext);
-  useEffect(() => {
-    if (!capability) return;
-    const current: FalVideoEndpointConfig = {
-      duration: node.data.duration ?? "auto",
-      resolution: String(node.data.resolution ?? ""),
-      aspectRatio: String(node.data.aspectRatio ?? ""),
-      generateAudio: Boolean(node.data.generateAudio),
-      bitrateMode: node.data.bitrateMode === "high" ? "high" : "standard",
-    };
-    if (
-      !capability.durations.includes(current.duration) ||
-      !capability.resolutions.includes(current.resolution) ||
-      !capability.aspectRatios.includes(current.aspectRatio) ||
-      !capability.bitrateModes.includes(current.bitrateMode)
-    ) {
-      const defaults = defaultFalVideoConfig(capability);
-      runtime.update({ ...defaults, model: capability.endpoint });
-    } else if (node.data.model !== capability.endpoint)
-      runtime.update({ model: capability.endpoint });
-  }, [capability?.endpoint]);
   return (
     <FalFrame node={node} selected={props.selected}>
       <label className="field-label">
@@ -96,14 +85,7 @@ export function FalVideoGenerationBody(
             value: item.id,
             label: item.label,
           }))}
-          onChange={(value) => {
-            const next = inferFalVideoEndpoint(value, occupancy).endpoint;
-            if (next)
-              runtime.update({
-                model: next.endpoint,
-                ...defaultFalVideoConfig(next),
-              });
-          }}
+          onChange={(value) => { const patch = selectFalVideoFamily(value); if (patch) runtime.update(patch); }}
         />
       </label>
       <label className="field-label">
@@ -215,15 +197,14 @@ export function FalVideoGenerationBody(
       ) : (
         <div className="node-error">{inference.error}</div>
       )}
-      {node.data.value && node.data.blobHash ? (
-        <video
-          className="result-image"
-          src={String(node.data.value)}
-          controls
-          playsInline
-          aria-label={t("video.generated")}
+      {node.data.value ? (
+        <InlineOutputPreview
+          kind="video"
+          value={String(node.data.value)}
+          label={t("video.generated")}
         />
       ) : null}
+      {configurationErrors.length ? <div className="node-error" role="alert">{t("pricing.conflict")} {configurationErrors.join(" ")}</div> : null}
       <FalRecoveryButton node={node} />
       <FalCostEstimateView estimate={estimate} />
       <FalRunButton

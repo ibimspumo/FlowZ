@@ -43,6 +43,7 @@ export function directImageInputs(
   return resolveDirectMediaInputs(
     mediaInputs(context, "image", ...ports),
     directMediaBindingFromConfig(config),
+    ports.filter((port) => context.connectedInputPorts?.has(port)).length,
   );
 }
 

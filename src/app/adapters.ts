@@ -19,6 +19,7 @@ import { isMediaNodeConfig } from "../domain/media-config";
 import { kindForModuleId, moduleIdForKind } from "../nodes";
 import { canonicalNodeRegistry, type CanonicalNodeRegistry } from "../nodes";
 import { assertAppNodeCompatibility } from "../engine/node-module";
+import { scalarType, type ValueType } from "../domain/values";
 
 export type RuntimeDisplay = Partial<
   Pick<
@@ -216,6 +217,7 @@ export function configPatchFor(
                 "guidance",
                 "acceleration",
                 "safetyChecker",
+                "streamingEnabled",
                 "imageEndpointConfigs",
                 "fanOutResultIds",
                 "listProcessingMode",
@@ -313,6 +315,7 @@ export function configPatchFor(
                                         ]
                                       : kind === "domainCheck"
                                         ? [
+                                            "domainName",
                                             "tlds",
                                             "privacyConsent",
                                             "selectedNameId",
@@ -346,9 +349,12 @@ export function configPatchFor(
                                                     "quality",
                                                     "background",
                                                     "inputFidelity",
+                                                    "streamingEnabled",
                                                     "imageEndpointConfigs",
                                                     "fanOutResultIds",
                                                     "listProcessingMode",
+                                                    "inlineBrief",
+                                                    "briefOverride",
                                                   ]
                                                 : kind === "artboard"
                                                   ? [
@@ -463,4 +469,18 @@ export function portType(
   return (
     direction === "input" ? registry[kind].inputs : registry[kind].outputs
   ).find((port) => port.id === base)?.type;
+}
+
+export function portValueType(
+  kind: NodeKind,
+  direction: "input" | "output",
+  portId: string,
+): ValueType | undefined {
+  const base = portId.split("::")[0];
+  if (direction === "output" && base.startsWith("variant:")) {
+    if (kind === "imageGeneration" || kind === "logoDesign" || kind === "imageCollection") return scalarType("image");
+    if (kind === "videoGeneration" || kind === "videoCollection") return scalarType("video");
+  }
+  const module = canonicalNodeRegistry.byKind[kind];
+  return (direction === "input" ? module?.inputs : module?.outputs)?.find((port) => port.id === base)?.valueType;
 }

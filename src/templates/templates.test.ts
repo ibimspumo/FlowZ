@@ -9,8 +9,9 @@ import * as commands from '../state/commands';
 import { CURRENT_SCHEMA_VERSION, type ProjectDocument } from '../domain';
 import { localizeTemplateMeta, setLocale } from '../i18n';
 import { localizedCanonicalNodeLabel } from '../i18n-schema';
-import { edgeToFlow, kindForModule, portType } from '../app/adapters';
+import { edgeToFlow, kindForModule, portValueType } from '../app/adapters';
 import { registry } from '../registry';
+import { areValueTypesCompatible } from '../engine/compatibility';
 
 describe('canvas templates', () => {
   it('keeps every bundled template compatible, acyclic and uniquely identified', () => {
@@ -33,7 +34,8 @@ describe('canvas templates', () => {
         const targetKind = kindForModule(target!.moduleId)!;
         expect(registry[sourceKind].outputs.some((port) => port.id === edge.sourcePortId), `${template.name}:${edge.id}: source port`).toBe(true);
         expect(registry[targetKind].inputs.some((port) => port.id === edge.targetPortId), `${template.name}:${edge.id}: target port`).toBe(true);
-        expect(portType(sourceKind,'output',edge.sourcePortId), `${template.name}:${edge.id}: type`).toBe(portType(targetKind,'input',edge.targetPortId));
+        const outputType=portValueType(sourceKind,'output',edge.sourcePortId),inputType=portValueType(targetKind,'input',edge.targetPortId);
+        expect(outputType&&inputType&&areValueTypesCompatible(outputType,inputType), `${template.name}:${edge.id}: type`).toBe(true);
         const flowEdge = edgeToFlow(edge, graph.nodes);
         expect(flowEdge.sourceHandle, `${template.name}:${edge.id}: source handle`).toBe(edge.sourcePortId);
         expect(flowEdge.targetHandle, `${template.name}:${edge.id}: target handle`).toBe(edge.targetPortId);
@@ -151,6 +153,14 @@ describe('canvas templates', () => {
       expect.objectContaining({source:'fonts',sourcePort:'styleHint',target:'image',targetPort:'prompt'}),
       expect.objectContaining({source:'image',sourcePort:'image',target:'artboard',targetPort:'images'}),
     ]));
+  });
+
+  it('rejects a template cable between structurally JSON but nominally different artifacts',()=>{
+    const invalid=structuredClone(templateById('social-artboard')!);
+    const palette=invalid.edges.find((edge)=>edge.source==='palette'&&edge.target==='artboard');
+    if(!palette)throw new Error('fixture');
+    palette.targetPort='fonts';
+    expect(validateTemplate(invalid).map((issue)=>issue.message)).toContain('flowz.color-palette kann nicht mit flowz.font-pairing verbunden werden.');
   });
 
   it('inserts every template stale and manual without persisted run state', () => {

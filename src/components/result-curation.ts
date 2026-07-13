@@ -91,7 +91,9 @@ export function selectableVideos(history: readonly HistoryItem[]): HistoryItem[]
 }
 
 export function fanOutValues(items: readonly HistoryItem[]): Record<string, string | string[]> {
-  const ready = items.flatMap((item) => item.value.startsWith('data:image/') ? [{ item, output: item.value }] : item.blobHash && item.mediaType?.startsWith('image/') ? [{ item, output: `flowz-cas:${item.blobHash}` }] : []);
+  const ready = items.flatMap((item) => item.blobHash && /^[a-f0-9]{64}$/i.test(item.blobHash) && item.mediaType?.startsWith('image/')
+    ? [{ item, output: `flowz-cas:${item.blobHash.toLowerCase()}` }]
+    : item.value.startsWith('data:image/') ? [{ item, output: item.value }] : []);
   const values: Record<string, string | string[]> = { images: ready.map(({ output }) => output) };
   for (const { item, output } of ready) values[`variant:${item.id}`] = output;
   return values;

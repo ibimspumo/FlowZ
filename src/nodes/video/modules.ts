@@ -8,6 +8,7 @@ import { imageResult, mediaInputs, textInputs } from "../fal-runtime";
 import { nodeSpecifications as spec } from "../module-specifications";
 import {
   type FalVideoEndpointConfig,
+  emptyConnectedFalVideoInputs,
   falVideoFamily,
   inferFalVideoEndpoint,
   validateFalVideoConfig,
@@ -65,6 +66,14 @@ export const videoGenerationAppModule = defineConcreteAppNodeModule(
           "references",
           "referenceLists",
         );
+      const connectedPorts = context.connectedInputPorts ?? new Set<string>();
+      const materialized = {
+        startFrame: start.length,
+        endFrame: end.length,
+        references: references.length,
+      };
+      const emptyConnected = emptyConnectedFalVideoInputs(materialized, connectedPorts);
+      if (emptyConnected.length) throw new Error(emptyConnected.join(" "));
       const family = falVideoFamily(String(node.config.model));
       if (!family)
         throw new Error(
@@ -139,8 +148,8 @@ export const videoGenerationAppModule = defineConcreteAppNodeModule(
           mimeType: result.mediaType,
         },
       };
-      const startFrame = { kind: "scalar" as const, value: { type: "image" as const, assetId: result.startFrameHash, mimeType: "image/png" } };
-      const endFrame = { kind: "scalar" as const, value: { type: "image" as const, assetId: result.endFrameHash, mimeType: "image/png" } };
+      const startFrame = { kind: "scalar" as const, value: { type: "image" as const, assetId: result.startFrameHash, mimeType: "image/jpeg" } };
+      const endFrame = { kind: "scalar" as const, value: { type: "image" as const, assetId: result.endFrameHash, mimeType: "image/jpeg" } };
       return {
         outputs: {
           video,

@@ -4,14 +4,7 @@ import { DefaultNodeIcon, defineAppNodeModule, type NodeExecutionContext, type N
 import type { NodeDefinition, NodeKind } from "../types";
 import { MODULE_ID_BY_KIND } from "./module-ids";
 import { lazy, Suspense, type ComponentType } from "react";
-import { scalarType, listType, type ScalarValueType, type ValueType } from "../domain/values";
-import type { DataType } from "../types";
-
-function scalarFor(type: DataType): ScalarValueType { return type === "image" || type === "video" || type === "audio" || type === "json" ? type : "text"; }
-function valueType(type: DataType): ValueType {
-  if (type.endsWith("List") || type === "list") return listType(type === "imageList" ? "image" : type === "videoList" ? "video" : type === "audioList" ? "audio" : type === "textList" ? "text" : "json");
-  return scalarType(scalarFor(type));
-}
+import { valueTypeForDataType } from "../domain/values";
 
 export function lazyModuleBody(loader: () => Promise<{ default: ComponentType<any> }>) {
   const LazyBody = lazy(loader);
@@ -31,7 +24,7 @@ export function defineConcreteAppNodeModule<const Kind extends Exclude<NodeKind,
 ) {
   if (definition.kind !== kind) throw new Error(`Node specification mismatch for ${kind}.`);
   const port = (direction: "input" | "output", item: NodeDefinition["inputs"][number] | NodeDefinition["outputs"][number]) => ({
-    id: item.id, label: item.label, labelKey: `node.${kind}.port.${item.id}`, dataType: item.type, valueType: valueType(item.type),
+    id: item.id, label: item.label, labelKey: `node.${kind}.port.${item.id}`, dataType: item.type, valueType: valueTypeForDataType(item.type, item.artifact),
     ...(direction === "input" && "optional" in item && item.optional ? { optional: true } : {}),
     ...(direction === "input" && "multiple" in item ? { multiple: item.multiple } : {}),
     ...(direction === "input" && "multiple" in item && item.multiple ? { cardinality: "many" as const } : {}),

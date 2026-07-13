@@ -324,6 +324,7 @@ impl Database {
         })
     }
     #[allow(clippy::type_complexity)]
+    #[cfg(test)]
     pub fn active_result_identity(
         &self,
         project_id: &str,
@@ -439,6 +440,10 @@ impl Database {
             transaction.execute("DELETE FROM assets WHERE blob_hash NOT IN (SELECT value FROM json_each(?1))", [&physical])?;
             transaction.execute("UPDATE results SET blob_hash=NULL WHERE blob_hash IS NOT NULL AND blob_hash NOT IN (SELECT value FROM json_each(?1))", [&physical])?;
             transaction.execute("DELETE FROM library_asset_versions WHERE blob_hash IS NOT NULL AND blob_hash NOT IN (SELECT value FROM json_each(?1))", [&physical])?;
+            // Font provenance is cache metadata, not a reason to retain a database row for a
+            // physically missing CAS object. Drop an unusable pair atomically before the blob
+            // reconciliation below; otherwise its RESTRICT foreign keys abort every startup.
+            transaction.execute("DELETE FROM font_provenance WHERE font_hash NOT IN (SELECT value FROM json_each(?1)) OR license_blob_hash NOT IN (SELECT value FROM json_each(?1))", [&physical])?;
             transaction.execute("DELETE FROM blobs WHERE hash NOT IN (SELECT value FROM json_each(?1)) AND hash NOT IN (SELECT thumbnail_blob_hash FROM library_asset_versions WHERE thumbnail_blob_hash IS NOT NULL) AND hash NOT IN (SELECT poster_blob_hash FROM media_metadata WHERE poster_blob_hash IS NOT NULL) AND hash NOT IN (SELECT blob_hash FROM document_covers)", [&physical])?;
             transaction.commit()?; Ok(())
         })
@@ -519,10 +524,10 @@ impl Database {
             .transaction()
             .map_err(|error| error.to_string())?;
         let referenced = |hash: &str| -> Result<bool, String> {
-            tx.query_row("SELECT EXISTS(SELECT 1 FROM results WHERE blob_hash=?1 OR text_value LIKE '%'||?1||'%' OR parameters_json LIKE '%'||?1||'%' UNION ALL SELECT 1 FROM assets WHERE blob_hash=?1 UNION ALL SELECT 1 FROM library_asset_versions WHERE blob_hash=?1 OR thumbnail_blob_hash=?1 UNION ALL SELECT 1 FROM media_metadata WHERE blob_hash=?1 OR poster_blob_hash=?1 LIMIT 1)",[hash],|row|row.get(0)).map_err(|error|error.to_string())
+            tx.query_row("SELECT EXISTS(SELECT 1 FROM results WHERE blob_hash=?1 OR text_value LIKE '%'||?1||'%' OR parameters_json LIKE '%'||?1||'%' UNION ALL SELECT 1 FROM assets WHERE blob_hash=?1 UNION ALL SELECT 1 FROM library_asset_versions WHERE blob_hash=?1 OR thumbnail_blob_hash=?1 UNION ALL SELECT 1 FROM media_metadata WHERE blob_hash=?1 OR poster_blob_hash=?1 UNION ALL SELECT 1 FROM document_covers WHERE blob_hash=?1 LIMIT 1)",[hash],|row|row.get(0)).map_err(|error|error.to_string())
         };
         if referenced(font_hash)? || referenced(license_hash)? {
-            return Err("Diese Schrift wird noch von einem Ergebnis oder Asset verwendet.".into());
+            return Err("Dieser Schrift-Cache wird noch dauerhaft verwendet.".into());
         }
         tx.execute(
             "DELETE FROM font_provenance WHERE font_hash=?1",
@@ -578,7 +583,8 @@ impl Database {
                  NOT EXISTS(SELECT 1 FROM results r WHERE r.blob_hash=b.hash) AND
                  NOT EXISTS(SELECT 1 FROM library_asset_versions v WHERE v.blob_hash=b.hash OR v.thumbnail_blob_hash=b.hash) AND
                  NOT EXISTS(SELECT 1 FROM media_metadata m WHERE m.blob_hash=b.hash OR m.poster_blob_hash=b.hash) AND
-                 NOT EXISTS(SELECT 1 FROM document_covers c WHERE c.blob_hash=b.hash)"
+                 NOT EXISTS(SELECT 1 FROM document_covers c WHERE c.blob_hash=b.hash) AND
+                 NOT EXISTS(SELECT 1 FROM font_provenance f WHERE f.font_hash=b.hash OR f.license_blob_hash=b.hash)"
             )?;
             let hashes: Vec<String> = statement.query_map([], |row| row.get(0))?.collect::<Result<_,_>>()?;
             drop(statement);
@@ -599,7 +605,8 @@ impl Database {
                  NOT EXISTS(SELECT 1 FROM results r WHERE r.blob_hash=?1) AND
                  NOT EXISTS(SELECT 1 FROM library_asset_versions v WHERE v.blob_hash=?1 OR v.thumbnail_blob_hash=?1) AND
                  NOT EXISTS(SELECT 1 FROM media_metadata m WHERE m.blob_hash=?1 OR m.poster_blob_hash=?1) AND
-                 NOT EXISTS(SELECT 1 FROM document_covers c WHERE c.blob_hash=?1)",
+                 NOT EXISTS(SELECT 1 FROM document_covers c WHERE c.blob_hash=?1) AND
+                 NOT EXISTS(SELECT 1 FROM font_provenance f WHERE f.font_hash=?1 OR f.license_blob_hash=?1)",
                 [hash],
             )? == 1)
         })
@@ -858,6 +865,7 @@ impl Database {
         prompt: Option<&str>,
         parameters: Option<&Value>,
         created_at: &str,
+        activate: bool,
     ) -> Result<StoredResult, String> {
         self.with_connection(|connection| {
             let transaction = connection.transaction()?;
@@ -876,6 +884,13 @@ impl Database {
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                 params![result_id, run_id, kind, text_value, blob.map(|item| item.hash.as_str()), asset_id, prompt, parameters_json, created_at],
             )?;
+            if activate {
+                transaction.execute(
+                    "INSERT INTO active_results(project_id,node_id,result_id) VALUES(?1,?2,?3)
+                     ON CONFLICT(project_id,node_id) DO UPDATE SET result_id=excluded.result_id",
+                    params![project_id, node_id, result_id],
+                )?;
+            }
             transaction.execute("UPDATE runs SET status='success' WHERE id=?1", [run_id])?;
             let cost = transaction.query_row(
                 "SELECT amount_microunits FROM costs WHERE run_id=?1 LIMIT 1",
@@ -892,7 +907,7 @@ impl Database {
                 result_id: result_id.into(), run_id: run_id.into(), project_id: project_id.into(), node_id: node_id.into(),
                 kind: kind.into(), text_value: text_value.map(str::to_owned), blob_hash: blob.map(|item| item.hash.clone()),
                 asset_id: asset_id.map(str::to_owned), media_type: blob.map(|item| item.media_type.clone()), created_at: created_at.into(),
-                cost_microunits: cost, model, prompt: prompt.map(str::to_owned), parameters: parameters.cloned(), active: false,
+                cost_microunits: cost, model, prompt: prompt.map(str::to_owned), parameters: parameters.cloned(), active: activate,
             })
         })
     }
@@ -1532,7 +1547,7 @@ impl Database {
     pub fn purge_blob_rows(&self, hashes: &[String]) -> Result<(), String> {
         self.with_connection(|connection| {
             let tx=connection.transaction()?;
-            for hash in hashes { tx.execute("DELETE FROM blobs WHERE hash=?1 AND NOT EXISTS(SELECT 1 FROM results WHERE blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM assets WHERE blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM library_asset_versions WHERE blob_hash=?1 OR thumbnail_blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM media_metadata WHERE blob_hash=?1 OR poster_blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM document_covers WHERE blob_hash=?1)",[hash])?; }
+            for hash in hashes { tx.execute("DELETE FROM blobs WHERE hash=?1 AND NOT EXISTS(SELECT 1 FROM results WHERE blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM assets WHERE blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM library_asset_versions WHERE blob_hash=?1 OR thumbnail_blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM media_metadata WHERE blob_hash=?1 OR poster_blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM document_covers WHERE blob_hash=?1) AND NOT EXISTS(SELECT 1 FROM font_provenance WHERE font_hash=?1 OR license_blob_hash=?1)",[hash])?; }
             tx.commit()
         })
     }
@@ -1588,7 +1603,7 @@ fn upsert_project_row(connection: &Connection, project: &ProjectDocument) -> rus
 
 fn collect_orphaned_hashes(tx: &Transaction<'_>) -> rusqlite::Result<Vec<String>> {
     let mut statement=tx.prepare(
-        "SELECT hash FROM blobs b WHERE NOT EXISTS(SELECT 1 FROM results WHERE blob_hash=b.hash) AND NOT EXISTS(SELECT 1 FROM assets WHERE blob_hash=b.hash) AND NOT EXISTS(SELECT 1 FROM library_asset_versions WHERE blob_hash=b.hash OR thumbnail_blob_hash=b.hash) AND NOT EXISTS(SELECT 1 FROM media_metadata WHERE blob_hash=b.hash OR poster_blob_hash=b.hash)"
+        "SELECT hash FROM blobs b WHERE NOT EXISTS(SELECT 1 FROM results WHERE blob_hash=b.hash) AND NOT EXISTS(SELECT 1 FROM assets WHERE blob_hash=b.hash) AND NOT EXISTS(SELECT 1 FROM library_asset_versions WHERE blob_hash=b.hash OR thumbnail_blob_hash=b.hash) AND NOT EXISTS(SELECT 1 FROM media_metadata WHERE blob_hash=b.hash OR poster_blob_hash=b.hash) AND NOT EXISTS(SELECT 1 FROM document_covers WHERE blob_hash=b.hash) AND NOT EXISTS(SELECT 1 FROM font_provenance WHERE font_hash=b.hash OR license_blob_hash=b.hash)"
     )?;
     let hashes = statement.query_map([], |row| row.get(0))?.collect();
     hashes
@@ -2471,6 +2486,105 @@ mod tests {
         assert!(deletion.join().unwrap().is_err());
         assert!(database.contains_blob(&font_hash).unwrap());
     }
+
+    #[test]
+    fn generic_orphan_cleanup_preserves_font_provenance_blobs() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::new(temp.path().join("flowz.sqlite3")).unwrap();
+        let font_hash = "a".repeat(64);
+        let license_hash = "b".repeat(64);
+        let orphan_hash = "c".repeat(64);
+        database
+            .with_connection(|connection| {
+                for (hash, kind) in [
+                    (&font_hash, "font/ttf"),
+                    (&license_hash, "text/plain"),
+                    (&orphan_hash, "application/octet-stream"),
+                ] {
+                    connection.execute(
+                        "INSERT INTO blobs(hash,size_bytes,media_type,relative_path,created_at) VALUES(?1,8,?2,?3,'now')",
+                        params![hash, kind, hash],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        database
+            .record_font_provenance(
+                &font_hash,
+                &license_hash,
+                &serde_json::json!({"family":"Test"}),
+                &serde_json::json!({"axes":{}}),
+            )
+            .unwrap();
+
+        database
+            .with_connection(|connection| {
+                let tx = connection.transaction()?;
+                let orphaned = collect_orphaned_hashes(&tx)?;
+                assert_eq!(orphaned, vec![orphan_hash.clone()]);
+                tx.rollback()
+            })
+            .unwrap();
+        assert!(!database.release_blob_if_unreferenced(&font_hash).unwrap());
+        database
+            .purge_blob_rows(&[font_hash.clone(), license_hash.clone()])
+            .unwrap();
+        assert!(database.contains_blob(&font_hash).unwrap());
+        assert!(database.contains_blob(&license_hash).unwrap());
+
+        assert_eq!(
+            database.take_unreferenced_blobs().unwrap(),
+            vec![orphan_hash]
+        );
+        assert!(database.contains_blob(&font_hash).unwrap());
+        assert!(database.contains_blob(&license_hash).unwrap());
+    }
+
+    #[test]
+    fn font_cache_delete_refuses_a_document_cover_reference_without_side_effects() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::new(temp.path().join("flowz.sqlite3")).unwrap();
+        let font_hash = "a".repeat(64);
+        let license_hash = "b".repeat(64);
+        database
+            .with_connection(|connection| {
+                for (hash, kind) in [(&font_hash, "font/ttf"), (&license_hash, "text/plain")] {
+                    connection.execute(
+                        "INSERT INTO blobs(hash,size_bytes,media_type,relative_path,created_at) VALUES(?1,8,?2,?3,'now')",
+                        params![hash, kind, hash],
+                    )?;
+                }
+                connection.execute(
+                    "INSERT INTO document_covers(document_id,document_kind,revision,content_fingerprint,blob_hash,width,height,media_type,generated_at) VALUES('document','flow',1,?1,?2,64,64,'image/png','now')",
+                    params!["d".repeat(64), font_hash],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        database
+            .record_font_provenance(
+                &font_hash,
+                &license_hash,
+                &serde_json::json!({"family":"Test"}),
+                &serde_json::json!({"axes":{}}),
+            )
+            .unwrap();
+
+        let error = database
+            .delete_font_cache_blobs_atomic(
+                &font_hash,
+                &license_hash,
+                || Ok(()),
+                |_| panic!("physical deletion must not run for a referenced blob"),
+            )
+            .unwrap_err();
+        assert!(error.contains("verwendet"));
+        assert!(database.contains_blob(&font_hash).unwrap());
+        assert!(database.contains_blob(&license_hash).unwrap());
+        assert!(database.font_provenance(&font_hash).unwrap().is_some());
+    }
+
     #[test]
     fn refuses_newer_database() {
         let t = tempfile::tempdir().unwrap();
@@ -2847,9 +2961,17 @@ mod tests {
                 Some("A precise prompt"),
                 Some(&parameters),
                 "now",
+                true,
             )
             .unwrap();
-        assert!(!stored.active);
+        assert!(stored.active);
+        assert_eq!(
+            database
+                .active_result_identity("project", "node")
+                .unwrap()
+                .map(|item| item.0),
+            Some("result".into())
+        );
         assert_eq!(stored.prompt.as_deref(), Some("A precise prompt"));
         assert_eq!(stored.parameters, Some(parameters.clone()));
 
@@ -2863,12 +2985,9 @@ mod tests {
         }).unwrap();
         let before = database.project_results("project").unwrap();
         assert_eq!(before[0].asset_id.as_deref(), Some("asset-exact"));
-        assert!(!before[0].active);
+        assert!(before[0].active);
         assert_eq!(before[0].parameters, Some(parameters));
 
-        database
-            .set_active_result("project", "node", "result")
-            .unwrap();
         assert!(database.project_results("project").unwrap()[0].active);
     }
 
@@ -3115,6 +3234,7 @@ mod tests {
                 None,
                 Some(&serde_json::json!({"orphaned": true})),
                 "now",
+                false,
             )
             .unwrap();
 
@@ -3134,6 +3254,83 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
+    }
+
+    #[test]
+    fn provider_run_accepts_one_late_total_cost_after_inactive_siblings() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::new(temp.path().join("flowz.sqlite3")).unwrap();
+        database
+            .with_connection(|connection| {
+                connection.execute(
+                    "INSERT INTO projects VALUES('project','Test','project',2,'now','now')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        database
+            .record_provider_completion("variant-run", "project", "node", "model", None, "first")
+            .unwrap();
+        database
+            .attach_result(
+                "variant-2",
+                "variant-run",
+                "project",
+                "node",
+                "text",
+                Some("Second"),
+                None,
+                None,
+                None,
+                Some(&serde_json::json!({"variantIndex": 1, "variantCount": 2})),
+                "first",
+                false,
+            )
+            .unwrap();
+        database
+            .record_provider_completion(
+                "variant-run",
+                "project",
+                "node",
+                "model",
+                Some(42_000),
+                "complete",
+            )
+            .unwrap();
+        database
+            .attach_result(
+                "variant-1",
+                "variant-run",
+                "project",
+                "node",
+                "text",
+                Some("First"),
+                None,
+                None,
+                None,
+                Some(&serde_json::json!({"variantIndex": 0, "variantCount": 2})),
+                "complete",
+                true,
+            )
+            .unwrap();
+        database
+            .with_connection(|connection| {
+                let ledger: (i64, i64) = connection.query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(amount_microunits),0) FROM costs WHERE run_id='variant-run'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(ledger, (1, 42_000));
+                Ok(())
+            })
+            .unwrap();
+        let results = database.project_results("project").unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results.iter().filter(|result| result.active).count(), 1);
+        assert!(results
+            .iter()
+            .all(|result| result.cost_microunits == Some(42_000)));
     }
 
     #[test]

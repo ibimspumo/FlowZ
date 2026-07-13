@@ -65,11 +65,16 @@ function imageValues(
   inputs: Readonly<Record<string, readonly RuntimeValue[]>>,
   ports: string[],
   config?: Record<string, JsonValue>,
+  connectedInputPorts?: ReadonlySet<string>,
 ) {
   const connected = scalars(inputs, ports).flatMap((value) =>
     value.type === "image" ? [value.assetId.startsWith("flowz-cas:") ? value.assetId : `flowz-cas:${value.assetId}`] : [],
   );
-  return resolveDirectMediaInputs(connected, config ? directMediaBindingFromConfig(config) : undefined).values;
+  return resolveDirectMediaInputs(
+    connected,
+    config ? directMediaBindingFromConfig(config) : undefined,
+    ports.filter((port) => connectedInputPorts?.has(port)).length,
+  ).values;
 }
 async function chat(
   node: { config: TextConfig },
@@ -92,6 +97,7 @@ async function chat(
     resultId: string;
     assetId: string;
     generationId: string;
+    costMicrounits: number;
   }[] = [];
   let cost = 0;
   for (let index = 0; index < count; index++) {
@@ -101,7 +107,7 @@ async function chat(
       count > 1
         ? `${prompt}\n\nErzeuge ausschließlich Variante ${index + 1} von ${count}.`
         : prompt,
-      vision ? imageValues(context.inputs, ["image", "imageLists"], node.config) : [],
+      vision ? imageValues(context.inputs, ["image", "imageLists"], node.config, context.connectedInputPorts) : [],
       String(node.config.outputMode) === "single" ? "single" : "free",
     );
     const value = String(result.content ?? "").trim();
@@ -111,6 +117,7 @@ async function chat(
       resultId: result.resultId ?? "",
       assetId: result.assetId ?? "",
       generationId: result.generationId ?? "",
+      costMicrounits: result.costMicrounits ?? 0,
     });
     cost += result.costMicrounits ?? 0;
   }

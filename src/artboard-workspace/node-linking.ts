@@ -18,7 +18,7 @@ const connectedOutput = (node: FlowNode, sourceHandle: string | null | undefined
   return typeof node.data.value === "string" ? [node.data.value] : [];
 };
 
-function upstreamValues(nodeId: string, portId: "palette" | "fonts" | "images", nodes: readonly FlowNode[], edges: readonly FlowEdge[]): string[] {
+function upstreamValues(nodeId: string, portId: "palette" | "fonts" | "images" | "imageLists", nodes: readonly FlowNode[], edges: readonly FlowEdge[]): string[] {
   return edges
     .filter((edge) => edge.target === nodeId && basePort(edge.targetHandle) === portId)
     .sort((left, right) => (left.data?.order ?? 0) - (right.data?.order ?? 0) || left.id.localeCompare(right.id))
@@ -35,7 +35,7 @@ function upstreamValues(nodeId: string, portId: "palette" | "fonts" | "images", 
 export function artboardNodeRequestFromFlow(flowId: string, nodeId: string, nodes: readonly FlowNode[], edges: readonly FlowEdge[]): ArtboardNodeRequest {
   const palette = upstreamValues(nodeId, "palette", nodes, edges);
   const fonts = upstreamValues(nodeId, "fonts", nodes, edges);
-  const images = upstreamValues(nodeId, "images", nodes, edges);
+  const images = [...upstreamValues(nodeId, "images", nodes, edges), ...upstreamValues(nodeId, "imageLists", nodes, edges)];
   return { flowId, nodeId, upstream: { fingerprint: JSON.stringify({ palette, fonts, images }), palette, fonts, images } };
 }
 
@@ -63,19 +63,20 @@ async function rawSha256(value: string): Promise<string> {
 /** Converts the current typed Flow connections into immutable Artboard bindings. */
 export async function createArtboardInputSnapshot(request: ArtboardNodeRequest, nodes: readonly FlowNode[], edges: readonly FlowEdge[]): Promise<ArtboardInputSnapshot> {
   const bindings: Record<string, InputBinding> = {};
-  const incoming = edges.filter((edge) => edge.target === request.nodeId && ["palette", "fonts", "images"].includes(basePort(edge.targetHandle)))
+  const incoming = edges.filter((edge) => edge.target === request.nodeId && ["palette", "fonts", "images", "imageLists"].includes(basePort(edge.targetHandle)))
     .sort((left, right) => basePort(left.targetHandle).localeCompare(basePort(right.targetHandle)) || (left.data?.order ?? 0) - (right.data?.order ?? 0) || left.id.localeCompare(right.id));
   const counters = new Map<string, number>();
   for (const edge of incoming) {
     const source = nodes.find((node) => node.id === edge.source); if (!source) continue;
     const port = basePort(edge.targetHandle); const values = connectedOutput(source, edge.sourceHandle, edge.data?.dataType);
     for (const value of values) {
-      if (port === "images" && !CAS.test(value)) throw new Error("Artboard-Bilder müssen zuerst sicher im lokalen Medienspeicher vorliegen.");
-      const index = counters.get(port) ?? 0; counters.set(port, index + 1);
+      if ((port === "images" || port === "imageLists") && !CAS.test(value)) throw new Error("Artboard-Bilder müssen zuerst sicher im lokalen Medienspeicher vorliegen.");
+      const bindingPort = port === "imageLists" ? "images" : port;
+      const index = counters.get(bindingPort) ?? 0; counters.set(bindingPort, index + 1);
       // The native persistence boundary re-hashes the exact result text stored
       // in SQLite. Hash the same bytes here (not a JSON fingerprint wrapper).
       const hash = await rawSha256(value);
-      const id = `${port}-${index}`;
+      const id = `${bindingPort}-${index}`;
       bindings[id] = {
         id,
         source: { projectId: validId(request.flowId, "flow"), nodeId: validId(source.id, `source-${hash.slice(0, 24)}`), portId: validId(basePort(edge.sourceHandle), "output"), resultId: activeResultId(source, value, `result-${hash.slice(0, 24)}`) },

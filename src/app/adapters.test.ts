@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GraphNode, ProjectDocument } from '../domain';
-import { configPatchFor, connectionCreatesCycle, edgeToFlow, flowEdgeToGraph, nextInputOrder, nodeToFlow } from './adapters';
+import { configPatchFor, connectionCreatesCycle, edgeToFlow, flowEdgeToGraph, nextInputOrder, nodeToFlow, portValueType } from './adapters';
+import { areValueTypesCompatible } from '../engine/compatibility';
 
 const document: ProjectDocument = {
   schemaVersion: 2, id: '00000000-0000-4000-8000-000000000001', name: 'Adapter',
@@ -29,6 +30,14 @@ describe('React Flow adapters', () => {
     expect(nextInputOrder(document, 'b', 'prompt')).toBe(1);
   });
 
+  it('resolves nominal Brand port identity independently of the visual JSON cable type',()=>{
+    const brief=portValueType('brandBrief','output','brief')!;
+    expect(areValueTypesCompatible(brief,portValueType('audienceAnalysis','input','brief')!)).toBe(true);
+    expect(areValueTypesCompatible(brief,portValueType('domainCheck','input','names')!)).toBe(false);
+    expect(portValueType('artboard','input','palette')).toMatchObject({scalar:'json',artifact:'flowz.color-palette'});
+    expect(portValueType('artboard','input','fonts')).toMatchObject({scalar:'json',artifact:'flowz.font-pairing'});
+  });
+
   it('rejects a reconnect that closes a cycle', () => {
     const reverse = { id: 'reverse', sourceNodeId: 'b', sourcePortId: 'text', targetNodeId: 'a', targetPortId: 'input', order: 0 };
     expect(connectionCreatesCycle(document, reverse)).toBe(true);
@@ -55,6 +64,15 @@ describe('React Flow adapters', () => {
   it('persists deliberate variant and list processing settings', () => {
     expect(configPatchFor('textGeneration', { variantCount: 4, listProcessingMode: 'map' })).toEqual({ variantCount: 4, listProcessingMode: 'map' });
     expect(configPatchFor('imageAnalysis', { listProcessingMode: 'aggregate' })).toEqual({ listProcessingMode: 'aggregate' });
+  });
+
+  it('persists domain input and inline logo brief controls', () => {
+    expect(configPatchFor('domainCheck', {
+      domainName: 'flowz', tlds: ['de', 'com'], privacyConsent: true,
+    })).toEqual({ domainName: 'flowz', tlds: ['de', 'com'], privacyConsent: true });
+    expect(configPatchFor('logoDesign', {
+      inlineBrief: 'Präzise, geometrisch und ohne Wortmarke.', briefOverride: true,
+    })).toEqual({ inlineBrief: 'Präzise, geometrisch und ohne Wortmarke.', briefOverride: true });
   });
 
   it('marks typed list cables visually without changing their semantic type', () => {

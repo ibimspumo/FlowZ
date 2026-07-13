@@ -2,8 +2,9 @@ import { Background, BackgroundVariant, Controls, MiniMap, ReactFlow, ReactFlowP
 import '@xyflow/react/dist/style.css';
 import { AlertTriangle, Database, Group, History, LayoutTemplate, Library, LoaderCircle, MousePointer2, Pencil, Play, Redo2, RotateCcw, Sparkles, Square, Trash2, Ungroup, Undo2, X } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react';
-import { connectionCreatesCycle, flowEdgeToGraph, nextInputOrder, portType } from './app/adapters';
+import { connectionCreatesCycle, flowEdgeToGraph, nextInputOrder, portValueType } from './app/adapters';
 import { ModuleNodeComponent } from './components/ModuleNodeComponent';
+import { RecoveryBoundary } from './components/RecoveryBoundary';
 import { NodeMenu, type NodeMenuState, type PendingConnection } from './components/NodeMenu';
 import { AssetPalette } from './components/AssetPalette';
 import { OrphanRunsPalette } from './components/OrphanRunsPalette';
@@ -22,6 +23,7 @@ import { hasNodeExecution, leaseNodeExecution, summarizeExecutionCosts } from '.
 import { eligibleAutomaticTargets, executeWorkflow, type FailureDecision, type WorkflowFailure } from './engine/workflow-execution';
 import { createExecutionPlan } from './engine/planner';
 import { createWorkflowRunSession, type WorkflowRunSession } from './engine/workflow-session';
+import { areProductPortsCompatible, areValueTypesCompatible } from './engine/compatibility';
 import { ModalDialog } from './components/ModalDialog';
 import { formatCurrency, formatDate, localizeErrorMessage, t as translate, useI18n } from './i18n';
 import { DocumentTabs, type DocumentTabTarget } from './home/DocumentTabs';
@@ -294,9 +296,10 @@ export function Workspace({ projectId, initialViewState, onViewStateChange }: { 
   function validConnection(connection: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }) {
     const source = nodes.find((node) => node.id === connection.source); const target = nodes.find((node) => node.id === connection.target);
     if (!source || !target || source.id === target.id) return false;
-    const outputType = portType(source.data.kind, 'output', connection.sourceHandle ?? '');
+    const outputType = portValueType(source.data.kind, 'output', connection.sourceHandle ?? '');
+    const inputType = portValueType(target.data.kind, 'input', connection.targetHandle ?? '');
     const input = registry[target.data.kind].inputs.find((item) => item.id === baseHandleId(connection.targetHandle));
-    if (!outputType || !input || outputType !== input.type || (!input.multiple && edges.some((edge) => edge.id !== reconnectingEdgeId.current && edge.target === target.id && baseHandleId(edge.targetHandle) === baseHandleId(connection.targetHandle)))) return false;
+    if (!outputType || !inputType || !input || !areValueTypesCompatible(outputType,inputType) || (!input.multiple && edges.some((edge) => edge.id !== reconnectingEdgeId.current && edge.target === target.id && baseHandleId(edge.targetHandle) === baseHandleId(connection.targetHandle)))) return false;
     if (!document || !connection.sourceHandle || !connection.targetHandle) return true;
     const targetPort = baseHandleId(connection.targetHandle);
     const candidate = flowEdgeToGraph({ id: 'candidate', source: source.id, sourceHandle: connection.sourceHandle, target: target.id, targetHandle: targetPort }, nextInputOrder(document, target.id, targetPort));
@@ -319,7 +322,7 @@ export function Workspace({ projectId, initialViewState, onViewStateChange }: { 
       ? definition.outputs.find((output) => output.id === state.fromHandle?.id)
       : definition.inputs.find((input) => input.id === baseHandleId(state.fromHandle?.id));
     if (!port) return;
-    openMenu(pointerPosition(event), { nodeId: fromNode.id, handleId: state.fromHandle.id, handleType: state.fromHandle.type, dataType: port.type });
+    openMenu(pointerPosition(event), { nodeId: fromNode.id, handleId: state.fromHandle.id, handleType: state.fromHandle.type, dataType: port.type, ...(port.artifact?{artifact:port.artifact}:{}) });
   }
 
   function handleConnectStart(_: MouseEvent | TouchEvent, params: OnConnectStartParams) {
@@ -362,14 +365,16 @@ export function Workspace({ projectId, initialViewState, onViewStateChange }: { 
     let connection: Connection | null = null;
 
     if (pending?.handleType === 'source') {
-      const inputIndex = definition.inputs.findIndex((input) => input.type === pending.dataType);
+      const inputIndex = definition.inputs.findIndex((input) => areProductPortsCompatible({type:pending.dataType,...(pending.artifact?{artifact:pending.artifact}:{})},input));
       const input = definition.inputs[inputIndex];
+      if (!input) return;
       position = { x: menu.flow.x, y: menu.flow.y - PORT_TOP - inputIndex * PORT_GAP };
       const newId = addNode(kind, position);
       connection = { source: pending.nodeId, sourceHandle: pending.handleId, target: newId, targetHandle: input.id };
     } else if (pending?.handleType === 'target') {
-      const outputIndex = definition.outputs.findIndex((output) => output.type === pending.dataType);
+      const outputIndex = definition.outputs.findIndex((output) => areProductPortsCompatible(output,{type:pending.dataType,...(pending.artifact?{artifact:pending.artifact}:{})}));
       const output = definition.outputs[outputIndex];
+      if (!output) return;
       position = { x: menu.flow.x - NODE_WIDTH, y: menu.flow.y - PORT_TOP - outputIndex * PORT_GAP };
       const newId = addNode(kind, position);
       connection = { source: newId, sourceHandle: output.id, target: pending.nodeId, targetHandle: pending.handleId };
@@ -998,7 +1003,7 @@ export function FlowZAppShell({ artboardRepository = lazyDesktopArtboardReposito
     <DocumentTabs tabs={session.openDocuments} active={session.active} onActivate={(target) => void activateTarget(target)} onCloseRequest={(tab) => void closeTab(tab.documentId)} />
     <div className="flowz-active-surface">
       {session.active.surface === 'home' || !activeTab ? <Suspense fallback={<div className="home-shell-loading" role="status"><LoaderCircle className="spin" size={18} /></div>}><LazyHomeScreen documents={visibleDocuments} query={query} selectedDocumentId={selectedDocumentId} contextMenu={contextMenu} loading={catalogLoading} errorMessage={catalogError} resolveCoverSrc={(document) => document.cover ? `${mediaUrl(document.cover.blobHash)}?cover=${encodeURIComponent(document.cover.contentFingerprint.slice(0, 16))}` : undefined} canCreateKind={() => true} onCreate={(kind) => void createDocument(kind)} onOpenSettings={() => setShellSettingsOpen(true)} onQueryChange={setQuery} onSelect={setSelectedDocumentId} onOpen={(document) => void openDocument(document)} onRenameRequest={(document) => requestDocumentAction('rename', document)} onDuplicateRequest={(document) => requestDocumentAction('duplicate', document)} onDeleteRequest={(document) => requestDocumentAction('delete', document)} onContextMenuRequest={(request) => setContextMenu({ documentId: request.document.id, x: request.x, y: request.y })} onContextMenuClose={() => setContextMenu(undefined)} /></Suspense>
-        : activeTab.kind === 'flow' ? <ReactFlowProvider key={activeTab.documentId}><Workspace projectId={activeTab.documentId} initialViewState={activeTab.viewState.kind === 'flow' ? activeTab.viewState : undefined} onViewStateChange={updateFlowViewState} /></ReactFlowProvider>
+        : activeTab.kind === 'flow' ? <RecoveryBoundary scope="workspace" resetKey={activeTab.documentId}><ReactFlowProvider key={activeTab.documentId}><Workspace projectId={activeTab.documentId} initialViewState={activeTab.viewState.kind === 'flow' ? activeTab.viewState : undefined} onViewStateChange={updateFlowViewState} /></ReactFlowProvider></RecoveryBoundary>
           : <Suspense fallback={<div className="home-shell-loading" role="status"><LoaderCircle className="spin" size={18} /></div>}><LazyArtboardDocumentSurface key={activeTab.documentId} documentId={activeTab.documentId} name={activeTab.name} repository={artboardRepository} availableSnapshots={availableArtboardSnapshots} onBack={() => void activateTarget({ surface: 'home' })} onNameChange={(name) => { setCatalog((items) => items.map((item) => item.id === activeTab.documentId ? { ...item, name } : item)); setSession((current) => reduceSession(current, { type: 'rename', documentId: activeTab.documentId, name })); }} onSaveStateChange={(saveState) => setSession((current) => reduceSession(current, { type: 'save-state', documentId: activeTab.documentId, saveState }))} onRegisterFlush={(flush) => { artboardFlushRef.current = flush; }} onRevisionChange={updateLinkedNodeFromRevision} onOpenProviderSettings={() => setShellSettingsOpen(true)} /></Suspense>}
     </div>
     <ModalDialog open={Boolean(artboardLinkRequest)} className="artboard-link-dialog" label={t('artboard.linkTitle')} onClose={() => setArtboardLinkRequest(undefined)}>

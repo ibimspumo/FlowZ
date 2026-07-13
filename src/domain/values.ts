@@ -1,10 +1,11 @@
 import type { JsonValue } from './project';
 
 export type ScalarValueType = 'text' | 'image' | 'video' | 'audio' | 'webpage' | 'json';
+export type ArtifactIdentity = `flowz.${string}`;
 
 export type ValueType =
-  | { kind: 'scalar'; scalar: ScalarValueType }
-  | { kind: 'list'; item: ScalarValueType };
+  | { kind: 'scalar'; scalar: ScalarValueType; artifact?: ArtifactIdentity }
+  | { kind: 'list'; item: ScalarValueType; artifact?: ArtifactIdentity };
 
 export type TextValue = { type: 'text'; value: string };
 export type MediaValue = {
@@ -26,6 +27,22 @@ export type InputCardinality = 'one' | 'many';
 
 export const scalarType = (scalar: ScalarValueType): ValueType => ({ kind: 'scalar', scalar });
 export const listType = (item: ScalarValueType): ValueType => ({ kind: 'list', item });
+export const artifactType = (artifact: ArtifactIdentity): ValueType => ({ kind: 'scalar', scalar: 'json', artifact });
+
+export function valueTypeForDataType(type: string, artifact?: ArtifactIdentity): ValueType {
+  const list = type.endsWith('List') || type === 'list';
+  const scalar: ScalarValueType = type === 'image' || type === 'imageList'
+    ? 'image'
+    : type === 'video' || type === 'videoList'
+      ? 'video'
+      : type === 'audio' || type === 'audioList'
+        ? 'audio'
+        : type === 'json' || type === 'jsonList' || type === 'list'
+          ? 'json'
+          : 'text';
+  if (artifact && scalar !== 'json') throw new TypeError('Artifact identity requires a JSON value type.');
+  return list ? { kind: 'list', item: scalar, ...(artifact ? { artifact } : {}) } : artifact ? artifactType(artifact) : scalarType(scalar);
+}
 
 const SCALAR_VALUE_TYPES: ReadonlySet<string> = new Set(['text', 'image', 'video', 'audio', 'webpage', 'json']);
 
@@ -35,10 +52,14 @@ export function isScalarValueType(value: unknown): value is ScalarValueType {
 
 export function isValueType(value: unknown): value is ValueType {
   if (!value || typeof value !== 'object') return false;
-  const candidate = value as { kind?: unknown; scalar?: unknown; item?: unknown };
-  return candidate.kind === 'scalar'
+  const candidate = value as { kind?: unknown; scalar?: unknown; item?: unknown; artifact?: unknown };
+  const base = candidate.kind === 'scalar'
     ? isScalarValueType(candidate.scalar)
     : candidate.kind === 'list' && isScalarValueType(candidate.item);
+  if (!base) return false;
+  if (candidate.artifact === undefined) return true;
+  const json = candidate.kind === 'scalar' ? candidate.scalar === 'json' : candidate.item === 'json';
+  return json && typeof candidate.artifact === 'string' && /^flowz\.[a-z][a-z0-9.-]{1,78}$/.test(candidate.artifact);
 }
 
 export function runtimeValueType(value: RuntimeValue): ValueType {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFalVideoInput, defaultFalVideoConfig, FAL_VIDEO_ENDPOINTS, inferFalVideoEndpoint, validateFalVideoConfig } from './capabilities';
+import { buildFalVideoInput, connectedFalVideoOccupancy, defaultFalVideoConfig, emptyConnectedFalVideoInputs, FAL_VIDEO_ENDPOINTS, falVideoFamily, inferFalVideoEndpoint, selectFalVideoFamily, validateFalVideoConfig } from './capabilities';
 
 describe('fal video capabilities', () => {
   it('fails closed and blocks occupied incompatible ports', () => {
@@ -29,5 +29,29 @@ describe('fal video capabilities', () => {
     expect(inferFalVideoEndpoint(family, { startFrame: 1, endFrame: 1, references: 0 }).endpoint?.mode).toBe('image-to-video');
     expect(inferFalVideoEndpoint(family, { startFrame: 0, endFrame: 0, references: 2 }).endpoint?.mode).toBe('reference-to-video');
     expect(inferFalVideoEndpoint(family, { startFrame: 1, endFrame: 0, references: 1 }).error).toContain('nicht gleichzeitig');
+  });
+  it('changes only family identity instead of coercing user-owned parameters', () => {
+    expect(selectFalVideoFamily('bytedance/seedance-2.0/fast')).toEqual({ model: 'bytedance/seedance-2.0/fast' });
+    expect(selectFalVideoFamily('unknown')).toBeUndefined();
+  });
+
+  it('normalizes both the default endpoint and dropdown family before switching modes', () => {
+    const family = 'bytedance/seedance-2.0/fast';
+    expect(falVideoFamily(FAL_VIDEO_ENDPOINTS[0].endpoint)).toBe(family);
+    expect(falVideoFamily(selectFalVideoFamily(family)!.model)).toBe(family);
+    expect(inferFalVideoEndpoint(family, { startFrame: 0, endFrame: 0, references: 0 }).endpoint?.endpoint).toBe(FAL_VIDEO_ENDPOINTS[0].endpoint);
+    expect(inferFalVideoEndpoint(family, { startFrame: 1, endFrame: 0, references: 0 }).endpoint?.endpoint).toBe(FAL_VIDEO_ENDPOINTS[1].endpoint);
+    expect(inferFalVideoEndpoint(family, { startFrame: 0, endFrame: 0, references: 1 }).endpoint?.endpoint).toBe(FAL_VIDEO_ENDPOINTS[2].endpoint);
+  });
+
+  it('selects the connected mode but blocks a connected source without a result', () => {
+    const materialized = { startFrame: 0, endFrame: 0, references: 0 };
+    const connected = new Set(['startFrame']);
+    const occupied = connectedFalVideoOccupancy(materialized, connected);
+    expect(occupied).toEqual({ startFrame: 1, endFrame: 0, references: 0 });
+    expect(inferFalVideoEndpoint('bytedance/seedance-2.0/fast', occupied).endpoint?.mode).toBe('image-to-video');
+    expect(emptyConnectedFalVideoInputs(materialized, connected)).toEqual([
+      'Das verbundene Startbild besitzt noch kein Ergebnis.',
+    ]);
   });
 });

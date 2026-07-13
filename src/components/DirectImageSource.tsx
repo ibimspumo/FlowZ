@@ -3,6 +3,7 @@ import type { JsonValue } from "../domain/project";
 import { appErrorMessage, localizeErrorMessage, useI18n, type TranslationKey } from "../i18n";
 import {
   assetVersionDirectMediaBinding,
+  connectedInputEdgeCount,
   directMediaBindingFromConfig,
   projectResultDirectMediaBinding,
   resolveDirectMediaInputs,
@@ -13,6 +14,7 @@ import { getLibraryAssetReference } from "../persistence/assets";
 import { storeLibraryResult } from "../persistence/library";
 import { isDesktopRuntime } from "../persistence/projects";
 import { useFlowStore } from "../store";
+import { currentExecutionSnapshot } from "../nodes/execution-snapshot";
 
 class DirectImageError extends Error {
   constructor(readonly key: TranslationKey) { super(key); }
@@ -46,16 +48,18 @@ export function DirectImageSource({
     edges = useFlowStore((state) => state.edges),
     inputsForPort = useFlowStore((state) => state.inputsForPort),
     { t } = useI18n();
-  void edges;
-  const occupiedPorts = ports.filter((port) => inputsForPort(nodeId, port).length > 0),
+  const connectedEdgeCount = connectedInputEdgeCount(edges, nodeId, ports),
+    occupiedPorts = ports.filter((port) => connectedInputEdgeCount(edges, nodeId, [port]) > 0),
     connected = ports.flatMap((port) => inputsForPort(nodeId, port)),
     portConflict = exclusivePorts && occupiedPorts.length > 1,
     binding = directMediaBindingFromConfig(data),
-    resolution = resolveDirectMediaInputs(connected, binding),
+    resolution = resolveDirectMediaInputs(connected, binding, connectedEdgeCount),
     label = portConflict && resolution.source !== "local-override"
       ? t("direct.conflict")
       : resolution.source === "local-override"
       ? t("direct.override")
+      : resolution.source === "cable-empty"
+        ? t("direct.connectedEmpty")
       : resolution.source === "cable"
         ? t("direct.connected")
         : resolution.source === "local-fallback"
@@ -72,8 +76,10 @@ export function DirectImageSource({
       const before = useFlowStore.getState(), projectId = before.document?.id;
       if (!projectId) throw new DirectImageError("direct.noProject");
       const revision = await before.flushPendingSave(), dataUrl = await readImage(file);
-      const result = await storeLibraryResult({ projectId, nodeId, kind: "input-image", dataUrl, originalName: file.name, parameters: { projectRevision: revision } });
+      const executionSnapshot = await currentExecutionSnapshot(nodeId, revision);
+      const result = await storeLibraryResult({ projectId, nodeId, kind: "input-image", dataUrl, originalName: file.name, parameters: { projectRevision: revision }, expectedRevision: revision, inputFingerprint: executionSnapshot });
       if (!result.blobHash || !result.resultId || !result.mediaType) throw new DirectImageError("direct.incomplete");
+      if (!result.active) throw new Error(appErrorMessage("project_changed", "Das importierte Bild wurde gespeichert, aber nicht aktiviert."));
       const current = useFlowStore.getState();
       if (current.document?.id !== projectId || current.revision !== revision || current.saveState !== "saved" || !current.nodes.some((node) => node.id === nodeId)) return;
       const next: DirectMediaBinding = projectResultDirectMediaBinding(projectId, revision, result, binding?.priority ?? "fallback");
@@ -114,12 +120,13 @@ export function DirectImageSource({
       <span>{t("direct.source")}</span><strong>{label}</strong>
     </div>
     {portConflict && resolution.source !== "local-override" ? <small className="direct-source-note" role="alert">{t("direct.portConflict")}</small> : null}
+    {resolution.source === "cable-empty" ? <small className="direct-source-note" role="alert">{t("direct.connectedEmptyHint")}</small> : null}
     {resolution.shadowedCableCount ? <small className="direct-source-note">{t("direct.shadowed",{count:resolution.shadowedCableCount})}</small> : null}
     {resolution.source === "cable" && binding ? <small className="direct-source-note">{t("direct.fallbackStored")}</small> : null}
     <div className="direct-source-actions">
       <input ref={inputRef} className="visually-hidden" type="file" accept="image/*" onChange={(event) => void importFile(event.currentTarget.files?.[0])} />
       <button type="button" className="secondary" disabled={busy} onClick={() => inputRef.current?.click()}>{busy ? t("direct.importing") : binding ? t("direct.replace") : t("direct.choose")}</button>
-      {binding && connected.length ? <button type="button" className="secondary" aria-pressed={binding.priority === "override"} onClick={updatePriority}>{binding.priority === "override" ? t("direct.useConnection") : t("direct.overrideLocal")}</button> : null}
+      {binding && connectedEdgeCount > 0 ? <button type="button" className="secondary" aria-pressed={binding.priority === "override"} onClick={updatePriority}>{binding.priority === "override" ? t("direct.useConnection") : t("direct.overrideLocal")}</button> : null}
       {binding ? <button type="button" className="icon-button" aria-label={t("direct.remove")} title={t("direct.remove")} onClick={() => useFlowStore.getState().clearDirectMediaFromNode(nodeId)}>×</button> : null}
     </div>
     {error ? <div className="node-error" role="alert">{error.key ? t(error.key) : localizeErrorMessage(error.detail)}</div> : null}

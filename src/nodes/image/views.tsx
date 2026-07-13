@@ -9,15 +9,20 @@ import {
   formatImageSizeLabel,
   FAL_IMAGE_MODELS,
   falImageModel,
+  selectFalImageModel,
+  validateFalImageConfig,
 } from "./capabilities";
 import { useFlowStore } from "../../store";
 import { estimateFalImageCost, falImageCostContext } from "../fal-pricing";
 import { useFalCostDisplay } from "../use-fal-cost-display";
-import { directMediaBindingFromConfig, resolveDirectMediaInputs } from "../direct-media";
+import { connectedInputEdgeCount, directMediaBindingFromConfig, resolveDirectMediaInputs } from "../direct-media";
 import {
   BACKGROUND_REMOVAL_TOOL,
   UPSCALE_TOOLS,
   falImageTool,
+  selectUpscaleTool,
+  validateUpscaleConfig,
+  type UpscaleConfig,
 } from "./tool-capabilities";
 import {
   FalFrame,
@@ -28,6 +33,7 @@ import {
   useFalExecution,
 } from "../fal-view";
 import { useI18n } from "../../i18n";
+import { InlineOutputPreview } from "../../components/InlineOutputPreview";
 
 export function FalLogoDesignBody(
   props: NodeViewProps<Record<string, JsonValue>>,
@@ -40,7 +46,7 @@ export function FalLogoDesignBody(
     { t } = useI18n();
   void edges;
   const connectedReferences = [...inputs(node.id, "references"), ...inputs(node.id, "referenceLists")],
-    referenceCount = resolveDirectMediaInputs(connectedReferences, directMediaBindingFromConfig(node.data as unknown as Record<string, JsonValue>)).values.length,
+    referenceCount = resolveDirectMediaInputs(connectedReferences, directMediaBindingFromConfig(node.data as unknown as Record<string, JsonValue>), connectedInputEdgeCount(edges, node.id, ["references", "referenceLists"])).values.length,
     prompt = String(node.data.prompt ?? ""),
     config = falImageConfigFromValues(node.data as Record<string, unknown>),
     endpoint = model ? falImageEndpoint(model, referenceCount) : undefined,
@@ -53,6 +59,7 @@ export function FalLogoDesignBody(
           prompt,
         })
       : ({ state: "unavailable", reason: "configuration-conflict" } as const);
+  const configurationErrors = validateFalImageConfig(model, config, referenceCount, prompt);
   const costContext = model && endpoint ? falImageCostContext({ model, endpoint, config, referenceCount }) : undefined,
     estimate = useFalCostDisplay(officialEstimate, endpoint, model?.schemaHash, costContext);
   const connectedBrief = inputs(node.id, "brief").length > 0,
@@ -151,12 +158,13 @@ export function FalLogoDesignBody(
         </>
       ) : null}
       {node.data.value ? (
-        <img
-          className="result-image"
-          src={String(node.data.value)}
-          alt={t("image.logoResult")}
+        <InlineOutputPreview
+          kind="image"
+          value={String(node.data.value)}
+          label={t("image.logoResult")}
         />
       ) : null}
+      {configurationErrors.length ? <div className="node-error" role="alert">{t("pricing.conflict")} {configurationErrors.join(" ")}</div> : null}
       <FalRecoveryButton node={node} />
       <FalCostEstimateView estimate={estimate} />
       <FalRunButton
@@ -180,7 +188,7 @@ export function FalImageGenerationBody(
     { t } = useI18n();
   void edges;
   const connectedReferences = [...inputs(node.id, "reference"), ...inputs(node.id, "referenceLists")],
-    referenceCount = resolveDirectMediaInputs(connectedReferences, directMediaBindingFromConfig(node.data as unknown as Record<string, JsonValue>)).values.length,
+    referenceCount = resolveDirectMediaInputs(connectedReferences, directMediaBindingFromConfig(node.data as unknown as Record<string, JsonValue>), connectedInputEdgeCount(edges, node.id, ["reference", "referenceLists"])).values.length,
     maskCount = inputs(node.id, "mask").length,
     prompt = [
       ...inputs(node.id, "prompt"),
@@ -200,6 +208,7 @@ export function FalImageGenerationBody(
           prompt,
         })
       : ({ state: "unavailable", reason: "configuration-conflict" } as const);
+  const configurationErrors = validateFalImageConfig(model, config, referenceCount, prompt, maskCount);
   const costContext = model && endpoint ? falImageCostContext({ model, endpoint, config, referenceCount, maskCount }) : undefined,
     estimate = useFalCostDisplay(officialEstimate, endpoint, model?.schemaHash, costContext);
   return (
@@ -214,23 +223,7 @@ export function FalImageGenerationBody(
             value: item.id,
             label: item.label,
           }))}
-          onChange={(value) => {
-            const next = falImageModel(value);
-            if (next)
-              runtime.update({
-                model: value,
-                resolution: next.sizes[0],
-                aspectRatio: (next.aspectRatios as readonly string[]).includes(
-                  "1:1",
-                )
-                  ? "1:1"
-                  : (next.aspectRatios[0] ?? "auto"),
-                outputFormat: next.formats.includes("png")
-                  ? "png"
-                  : next.formats[0],
-                variants: 1,
-              });
-          }}
+          onChange={(value) => { const patch = selectFalImageModel(value, node.data as unknown as Record<string, unknown>); if (patch) runtime.update(patch); }}
         />
       </label>
       <label className="field-label">
@@ -304,6 +297,128 @@ export function FalImageGenerationBody(
               />
             </label>
           </div>
+          {model.quality.length || model.background.length ? (
+            <div className="parameter-row">
+              {model.quality.length ? (
+                <label className="field-label">
+                  {t("image.quality")}
+                  <CustomSelect
+                    label={t("image.quality")}
+                    value={String(node.data.quality)}
+                    options={model.quality.map((value) => ({ value, label: value }))}
+                    onChange={(quality) => runtime.update({ quality })}
+                  />
+                </label>
+              ) : null}
+              {model.background.length ? (
+                <label className="field-label">
+                  {t("image.background")}
+                  <CustomSelect
+                    label={t("image.background")}
+                    value={String(node.data.background)}
+                    options={model.background.map((value) => ({ value, label: value }))}
+                    onChange={(background) => runtime.update({ background })}
+                  />
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+          {referenceCount > 0 && model.inputFidelity.length ? (
+            <label className="field-label">
+              {t("image.inputFidelity")}
+              <CustomSelect
+                label={t("image.inputFidelity")}
+                value={String(node.data.inputFidelity)}
+                options={model.inputFidelity.map((value) => ({ value, label: value }))}
+                onChange={(inputFidelity) => runtime.update({ inputFidelity })}
+              />
+            </label>
+          ) : null}
+          {model.safetyTolerance.length || model.thinkingLevels.length ? (
+            <div className="parameter-row">
+              {model.safetyTolerance.length ? (
+                <label className="field-label">
+                  {t("image.safetyTolerance")}
+                  <CustomSelect
+                    label={t("image.safetyTolerance")}
+                    value={String(node.data.safetyTolerance)}
+                    options={model.safetyTolerance.map((value) => ({ value, label: value }))}
+                    onChange={(safetyTolerance) => runtime.update({ safetyTolerance })}
+                  />
+                </label>
+              ) : null}
+              {model.thinkingLevels.length ? (
+                <label className="field-label">
+                  {t("image.thinkingLevel")}
+                  <CustomSelect
+                    label={t("image.thinkingLevel")}
+                    value={String(node.data.thinkingLevel ?? "")}
+                    options={model.thinkingLevels.map((value) => ({ value, label: value }))}
+                    onChange={(thinkingLevel) => runtime.update({ thinkingLevel })}
+                  />
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+          {'steps' in model && model.steps ? (
+            <div className="parameter-row">
+              <label className="field-label">
+                {t("image.steps")}
+                <input
+                  type="number"
+                  min={model.steps.min}
+                  max={model.steps.max}
+                  step={1}
+                  value={Number(node.data.steps ?? model.steps.min)}
+                  onChange={(event) => runtime.update({ steps: Number(event.currentTarget.value) })}
+                />
+              </label>
+              {'guidance' in model && model.guidance && referenceCount === 0 ? (
+                <label className="field-label">
+                  {t("image.guidance")}
+                  <input
+                    type="number"
+                    min={model.guidance.min}
+                    max={model.guidance.max}
+                    step={0.1}
+                    value={Number(node.data.guidance ?? model.guidance.min)}
+                    onChange={(event) => runtime.update({ guidance: Number(event.currentTarget.value) })}
+                  />
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+          {'acceleration' in model && Array.isArray(model.acceleration) ? (
+            <label className="field-label">
+              {t("image.acceleration")}
+              <CustomSelect
+                label={t("image.acceleration")}
+                value={String(node.data.acceleration)}
+                options={model.acceleration.map((value) => ({ value, label: value }))}
+                onChange={(acceleration) => runtime.update({ acceleration })}
+              />
+            </label>
+          ) : null}
+          {model.webSearch ? (
+            <label className="check-control">
+              <input
+                type="checkbox"
+                checked={node.data.webSearch === true}
+                onChange={(event) => runtime.update({ webSearch: event.currentTarget.checked })}
+              />
+              <span>{t("image.webSearch")}</span>
+            </label>
+          ) : null}
+          {'safetyChecker' in model && model.safetyChecker ? (
+            <label className="check-control">
+              <input
+                type="checkbox"
+                checked={node.data.safetyChecker === true}
+                onChange={(event) => runtime.update({ safetyChecker: event.currentTarget.checked })}
+              />
+              <span>{t("image.safetyChecker")}</span>
+            </label>
+          ) : null}
           {model.streaming ? (
             <label className="check-control">
               <input
@@ -323,12 +438,13 @@ export function FalImageGenerationBody(
         </>
       ) : null}
       {node.data.value ? (
-        <img
-          className="result-image"
-          src={String(node.data.value)}
-          alt={t("image.result")}
+        <InlineOutputPreview
+          kind="image"
+          value={String(node.data.value)}
+          label={t("image.result")}
         />
       ) : null}
+      {configurationErrors.length ? <div className="node-error" role="alert">{t("pricing.conflict")} {configurationErrors.join(" ")}</div> : null}
       <FalRecoveryButton node={node} />
       <FalCostEstimateView estimate={estimate} />
       <FalRunButton
@@ -355,6 +471,8 @@ export function FalImageToolBody(
     ),
     premium = String(node.data.model).includes("/topaz/"),
     { t } = useI18n();
+  const toolConfiguration = { ...(node.data as unknown as UpscaleConfig), endpoint: String(node.data.model) };
+  const configurationErrors = upscale ? validateUpscaleConfig(toolConfiguration) : [];
   return (
     <FalFrame node={node} selected={props.selected}>
       <DirectImageSource nodeId={node.id} data={node.data as unknown as Record<string, JsonValue>} ports={["image"]} />
@@ -369,13 +487,7 @@ export function FalImageToolBody(
                 value: item.id,
                 label: item.label,
               }))}
-              onChange={(model) =>
-                runtime.update({
-                  model,
-                  premiumConfirmed: false,
-                  factor: model.includes("/topaz/") ? 1 : 2,
-                })
-              }
+              onChange={(model) => { const patch = selectUpscaleTool(model); if (patch) runtime.update(patch); }}
             />
           </label>
           <div className="parameter-row">
@@ -437,12 +549,13 @@ export function FalImageToolBody(
         </div>
       )}
       {node.data.value ? (
-        <img
-          className="result-image"
-          src={String(node.data.value)}
-          alt={t("image.result")}
+        <InlineOutputPreview
+          kind="image"
+          value={String(node.data.value)}
+          label={t("image.result")}
         />
       ) : null}
+      {configurationErrors.length ? <div className="node-error" role="alert">{t("pricing.conflict")} {configurationErrors.join(" ")}</div> : null}
       <FalRecoveryButton node={node} />
       <FalRunButton
         running={runtime.running}

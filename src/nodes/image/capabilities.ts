@@ -59,6 +59,77 @@ export function defaultFalImageConfig(model: FalImageModel): FalImageConfig {
   };
 }
 
+function endpointConfigsFromValues(value: unknown): Record<string, Partial<FalImageConfig>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([, config]) => config && typeof config === 'object' && !Array.isArray(config))) as Record<string, Partial<FalImageConfig>>;
+}
+
+/** Keep only values supported by one exact endpoint and repair stale catalog
+ * values with that endpoint's audited defaults. */
+export function normalizeFalImageConfig(model: FalImageModel, candidate: Partial<FalImageConfig> = {}): FalImageConfig {
+  const defaults = defaultFalImageConfig(model);
+  const supported = <T extends string>(items: readonly T[], value: unknown, fallback: T): T =>
+    typeof value === 'string' && items.includes(value as T) ? value as T : fallback;
+  const integer = (value: unknown, min: number, max: number, fallback: number): number =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback;
+  return {
+    size: supported(model.sizes, candidate.size, defaults.size),
+    aspectRatio: model.aspectRatios.length
+      ? supported(model.aspectRatios, candidate.aspectRatio, defaults.aspectRatio)
+      : defaults.aspectRatio,
+    outputFormat: supported(model.formats, candidate.outputFormat, defaults.outputFormat),
+    variants: integer(candidate.variants, 1, model.variantMax, defaults.variants),
+    ...(model.seed && typeof candidate.seed === 'number' && Number.isSafeInteger(candidate.seed) && candidate.seed >= 0 ? { seed: candidate.seed } : {}),
+    ...(model.quality.length ? { quality: supported(model.quality, candidate.quality, defaults.quality!) } : {}),
+    ...(model.background.length ? { background: supported(model.background, candidate.background, defaults.background!) } : {}),
+    ...(model.inputFidelity.length ? { inputFidelity: supported(model.inputFidelity, candidate.inputFidelity, defaults.inputFidelity!) } : {}),
+    ...(model.safetyTolerance.length ? { safetyTolerance: supported(model.safetyTolerance, candidate.safetyTolerance, defaults.safetyTolerance!) } : {}),
+    ...(model.thinkingLevels.length && typeof candidate.thinkingLevel === 'string' && values(model.thinkingLevels).includes(candidate.thinkingLevel) ? { thinkingLevel: candidate.thinkingLevel } : {}),
+    ...(model.webSearch ? { webSearch: typeof candidate.webSearch === 'boolean' ? candidate.webSearch : false } : {}),
+    ...('steps' in model && model.steps ? { steps: integer(candidate.steps, model.steps.min, model.steps.max, defaults.steps!) } : {}),
+    ...('guidance' in model && model.guidance && typeof candidate.guidance === 'number' && Number.isFinite(candidate.guidance) && candidate.guidance >= model.guidance.min && candidate.guidance <= model.guidance.max
+      ? { guidance: candidate.guidance }
+      : 'guidance' in model && model.guidance ? { guidance: defaults.guidance } : {}),
+    ...('acceleration' in model && Array.isArray(model.acceleration) ? { acceleration: supported(model.acceleration, candidate.acceleration, defaults.acceleration!) } : {}),
+    ...('safetyChecker' in model && model.safetyChecker ? { safetyChecker: typeof candidate.safetyChecker === 'boolean' ? candidate.safetyChecker : defaults.safetyChecker } : {}),
+    ...(model.streaming ? { streamingEnabled: typeof candidate.streamingEnabled === 'boolean' ? candidate.streamingEnabled : defaults.streamingEnabled } : {}),
+  };
+}
+
+export function falImageConfigPatch(config: FalImageConfig): Record<string, string | number | boolean> {
+  return {
+    resolution: config.size,
+    aspectRatio: config.aspectRatio,
+    outputFormat: config.outputFormat,
+    variants: config.variants,
+    ...(config.seed == null ? {} : { seed: config.seed }),
+    ...(config.quality == null ? {} : { quality: config.quality }),
+    ...(config.background == null ? {} : { background: config.background }),
+    ...(config.inputFidelity == null ? {} : { inputFidelity: config.inputFidelity }),
+    ...(config.safetyTolerance == null ? {} : { safetyTolerance: config.safetyTolerance }),
+    ...(config.thinkingLevel == null ? {} : { thinkingLevel: config.thinkingLevel }),
+    ...(config.webSearch == null ? {} : { webSearch: config.webSearch }),
+    ...(config.steps == null ? {} : { steps: config.steps }),
+    ...(config.guidance == null ? {} : { guidance: config.guidance }),
+    ...(config.acceleration == null ? {} : { acceleration: config.acceleration }),
+    ...(config.safetyChecker == null ? {} : { safetyChecker: config.safetyChecker }),
+    ...(config.streamingEnabled == null ? {} : { streamingEnabled: config.streamingEnabled }),
+  };
+}
+
+/** Save the current endpoint configuration and activate a valid configuration
+ * for the selected model. Returning to a model restores its last valid values. */
+export function selectFalImageModel(id: string, current: Record<string, unknown> = {}): Record<string, unknown> | undefined {
+  const target = falImageModel(id);
+  if (!target) return undefined;
+  const endpointConfigs = endpointConfigsFromValues(current.imageEndpointConfigs);
+  const currentModel = falImageModel(String(current.model ?? ''));
+  if (currentModel) endpointConfigs[currentModel.id] = normalizeFalImageConfig(currentModel, falImageConfigFromValues(current));
+  const targetConfig = normalizeFalImageConfig(target, endpointConfigs[target.id]);
+  endpointConfigs[target.id] = targetConfig;
+  return { model: id, ...falImageConfigPatch(targetConfig), imageEndpointConfigs: endpointConfigs };
+}
+
 export function falImageConfigFromValues(config:Record<string,unknown>):FalImageConfig{
   return {size:String(config.resolution),aspectRatio:String(config.aspectRatio),outputFormat:String(config.outputFormat),variants:Number(config.variants),
     ...(config.seed==null?{}:{seed:Number(config.seed)}),...(typeof config.quality==="string"?{quality:config.quality}:{}),...(typeof config.background==="string"?{background:config.background}:{}),
@@ -104,14 +175,13 @@ export function validateFalImageConfig(model: FalImageModel | undefined, config:
   if (model.aspectRatios.length && !values(model.aspectRatios).includes(config.aspectRatio)) errors.push('Das Seitenverhältnis wird von diesem Endpoint nicht unterstützt.');
   if (!values(model.formats).includes(config.outputFormat)) errors.push('Das Ausgabeformat wird von diesem Endpoint nicht unterstützt.');
   if (!Number.isInteger(config.variants) || config.variants < 1 || config.variants > model.variantMax) errors.push(`Dieser Endpoint unterstützt 1 bis ${model.variantMax} Varianten.`);
-  if (config.seed != null && (!model.seed || !Number.isSafeInteger(config.seed) || config.seed < 0)) errors.push('Der Seed wird nicht unterstützt oder ist ungültig.');
-  if (config.quality && !values(model.quality).includes(config.quality)) errors.push('Diese Qualitätsstufe wird nicht unterstützt.');
-  if (config.background && !values(model.background).includes(config.background)) errors.push('Dieser Hintergrundmodus wird nicht unterstützt.');
-  if (referenceCount && config.inputFidelity && !values(model.inputFidelity).includes(config.inputFidelity)) errors.push('Input Fidelity wird von diesem Edit-Endpoint nicht unterstützt.');
-  if (config.safetyTolerance && !values(model.safetyTolerance).includes(config.safetyTolerance)) errors.push('Diese Safety-Stufe wird nicht unterstützt.');
-  if (config.thinkingLevel && !values(model.thinkingLevels).includes(config.thinkingLevel)) errors.push('Dieses Modell unterstützt diesen Thinking-Modus nicht.');
-  if (config.webSearch && !model.webSearch) errors.push('Dieses Modell unterstützt keine Websuche.');
-  if (config.background === 'transparent' && (model.id !== 'fal-ai/gpt-image-1.5' || config.outputFormat !== 'png')) errors.push('Transparenz ist nur mit GPT Image 1.5 als PNG verfügbar.');
+  if (model.seed && config.seed != null && (!Number.isSafeInteger(config.seed) || config.seed < 0)) errors.push('Der Seed ist ungültig.');
+  if (model.quality.length && config.quality && !values(model.quality).includes(config.quality)) errors.push('Diese Qualitätsstufe wird nicht unterstützt.');
+  if (model.background.length && config.background && !values(model.background).includes(config.background)) errors.push('Dieser Hintergrundmodus wird nicht unterstützt.');
+  if (referenceCount && model.inputFidelity.length && config.inputFidelity && !values(model.inputFidelity).includes(config.inputFidelity)) errors.push('Input Fidelity wird von diesem Edit-Endpoint nicht unterstützt.');
+  if (model.safetyTolerance.length && config.safetyTolerance && !values(model.safetyTolerance).includes(config.safetyTolerance)) errors.push('Diese Safety-Stufe wird nicht unterstützt.');
+  if (model.thinkingLevels.length && config.thinkingLevel && !values(model.thinkingLevels).includes(config.thinkingLevel)) errors.push('Dieses Modell unterstützt diesen Thinking-Modus nicht.');
+  if (model.background.some((value) => value === 'transparent') && config.background === 'transparent' && config.outputFormat !== 'png') errors.push('Transparenz ist nur mit GPT Image 1.5 als PNG verfügbar.');
   if ('steps' in model && model.steps && (config.steps == null || config.steps < model.steps.min || config.steps > model.steps.max)) errors.push('Die Schrittzahl liegt außerhalb des unterstützten Bereichs.');
   if ('guidance' in model && model.guidance && (config.guidance == null || config.guidance < model.guidance.min || config.guidance > model.guidance.max)) errors.push('Guidance liegt außerhalb des unterstützten Bereichs.');
   if ('acceleration' in model && Array.isArray(model.acceleration) && config.acceleration && !values(model.acceleration).includes(config.acceleration)) errors.push('Diese Beschleunigungsstufe wird nicht unterstützt.');
@@ -132,12 +202,12 @@ export function buildFalImageInput(model: FalImageModel, config: FalImageConfig,
     if ('reduxNoPrompt' in model && model.reduxNoPrompt) input.image_url = urls[0];
     else input.image_urls = urls;
   }
-  if (config.seed != null) input.seed = config.seed;
-  if (config.quality) input.quality = config.quality;
-  if (config.background) input.background = config.background;
-  if (edit && config.inputFidelity) input.input_fidelity = config.inputFidelity;
-  if (config.safetyTolerance) input.safety_tolerance = config.safetyTolerance;
-  if (config.thinkingLevel) input.thinking_level = config.thinkingLevel;
+  if (model.seed && config.seed != null) input.seed = config.seed;
+  if (model.quality.length && config.quality) input.quality = config.quality;
+  if (model.background.length && config.background) input.background = config.background;
+  if (edit && model.inputFidelity.length && config.inputFidelity) input.input_fidelity = config.inputFidelity;
+  if (model.safetyTolerance.length && config.safetyTolerance) input.safety_tolerance = config.safetyTolerance;
+  if (model.thinkingLevels.length && config.thinkingLevel) input.thinking_level = config.thinkingLevel;
   if (config.webSearch != null && model.webSearch) input.enable_web_search = config.webSearch;
   if (config.steps != null && 'steps' in model) input.num_inference_steps = config.steps;
   if (config.guidance != null && 'guidance' in model) input.guidance_scale = config.guidance;

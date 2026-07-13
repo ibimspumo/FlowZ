@@ -4,7 +4,7 @@ import {
   falImageModel,
 } from "./image/capabilities";
 import { falVideoCapability } from "./video/capabilities";
-import { estimateFalImageCost, estimateFalVideoCost, falEmpiricalSnapshot, falImageCostContext } from "./fal-pricing";
+import { estimateFalImageCost, estimateFalVideoCost, falEmpiricalSnapshot, falImageCostContext, falVideoCostContext } from "./fal-pricing";
 
 const model = (id: string) => {
   const value = falImageModel(id);
@@ -89,6 +89,22 @@ describe("versioned fal.ai pre-run cost estimates", () => {
     expect(automatic).toMatchObject({ state: "unavailable", reason: "automatic-duration" });
     const lowResolution = estimateFalVideoCost({ capability, config: { duration: 5, resolution: "480p", aspectRatio: "16:9", generateAudio: false, bitrateMode: "standard" }, occupancy: { startFrame: 0, endFrame: 0, references: 0 } });
     expect(lowResolution).toMatchObject({ state: "unavailable", reason: "unpriced-resolution" });
+  });
+
+  it("uses the audited endpoint modality in the video cost context", () => {
+    const capability = falVideoCapability("bytedance/seedance-2.0/fast/image-to-video")!;
+    const context = falVideoCostContext({
+      capability,
+      config: { duration: 4, resolution: "480p", aspectRatio: "16:9", generateAudio: false, bitrateMode: "standard" },
+    });
+    expect(context.billableConfig).toEqual({
+      modality: "image-to-video",
+      duration: 4,
+      resolution: "480p",
+      generateAudio: false,
+      aspectRatio: "16:9",
+      bitrateMode: "standard",
+    });
   });
 
   it("creates a local-actual snapshot only from a sufficient aggregate", () => {

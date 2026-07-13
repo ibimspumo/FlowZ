@@ -702,6 +702,22 @@ fn target_current(request: &ImageToolRequest, p: &Persistence) -> bool {
     } else {
         "image.upscale"
     };
+    let request_contract = json!({
+        "endpoint": request.endpoint,
+        "schemaHash": request.schema_hash,
+        "source": request.source,
+        "config": request.config,
+    });
+    if !crate::execution_snapshot::matches(
+        &request.project_id,
+        &request.node_id,
+        &request.input_fingerprint,
+        p,
+        &[module],
+        Some(&request_contract),
+    ) {
+        return false;
+    }
     p.projects
         .open(&request.project_id)
         .ok()
@@ -1047,6 +1063,83 @@ pub fn fal_image_tool_pending(
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgba};
+
+    #[test]
+    fn image_tool_target_requires_the_exact_source_and_configuration_snapshot() {
+        use crate::persistence::{
+            CanvasPosition, CreateProjectRequest, GraphNode, SaveProjectRequest, UpdatePolicy,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let persistence = Persistence::initialize(root.path()).unwrap();
+        let created = persistence
+            .projects
+            .create(CreateProjectRequest {
+                name: "Tool".into(),
+            })
+            .unwrap();
+        let expected_updated_at = created.project.updated_at;
+        let mut project = created.project;
+        let config = serde_json::from_value::<Map<String, Value>>(json!({
+            "model": SEEDVR,
+            "upscaleMode": "factor",
+            "factor": 2,
+        }))
+        .unwrap();
+        project.graph.nodes.push(GraphNode {
+            id: "tool".into(),
+            module_id: "image.upscale".into(),
+            module_version: 1,
+            position: CanvasPosition { x: 0.0, y: 0.0 },
+            label: None,
+            label_id: None,
+            config: config.clone(),
+            update_policy: UpdatePolicy::Manual,
+        });
+        let saved = persistence
+            .projects
+            .save(SaveProjectRequest {
+                project: project.clone(),
+                expected_updated_at,
+                expected_revision: created.revision,
+            })
+            .unwrap();
+        let mut request = ImageToolRequest {
+            run_id: Uuid::new_v4().to_string(),
+            project_id: project.id,
+            node_id: "tool".into(),
+            endpoint: SEEDVR.into(),
+            schema_hash: "seedvr-upscale-image-v1-20260711".into(),
+            source: format!("flowz-cas:{}", "a".repeat(64)),
+            config: json!({"upscaleMode":"factor","factor":2}),
+            estimated_cost_microunits: Some(4_000),
+            input_fingerprint: Value::Null,
+        };
+        let contract = json!({
+            "endpoint": request.endpoint,
+            "schemaHash": request.schema_hash,
+            "source": request.source,
+            "config": request.config,
+        });
+        request.input_fingerprint = json!({
+            "moduleId": "image.upscale",
+            "moduleVersion": 1,
+            "nodeConfig": config,
+            "connections": [],
+            "executionFingerprint": json!({
+                "moduleId": "image.upscale",
+                "moduleVersion": 1,
+                "config": config,
+                "inputs": []
+            }).to_string(),
+            "projectRevision": saved.revision,
+            "requestContract": contract,
+        });
+        assert!(target_current(&request, &persistence));
+        request.source = format!("flowz-cas:{}", "b".repeat(64));
+        assert!(!target_current(&request, &persistence));
+    }
+
     #[test]
     fn bria_payload_is_async() {
         let request = ImageToolRequest {

@@ -282,6 +282,23 @@ pub struct FalVideoRequest {
     pub cost_context: Option<crate::persistence::FalCostContext>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedFalVideoRequestContract {
+    endpoint: String,
+    schema_hash: String,
+    prompt: String,
+    duration: Value,
+    resolution: String,
+    aspect_ratio: String,
+    generate_audio: bool,
+    bitrate_mode: String,
+    seed: Option<u64>,
+    start_frame: Option<String>,
+    end_frame: Option<String>,
+    references: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FalPendingRun {
@@ -311,9 +328,11 @@ pub struct FalVideoResult {
     target_current: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct EndpointSpec {
-    mode: &'static str,
+    family: &'static str,
+    queue_app: &'static str,
+    modality: &'static str,
     schema_hash: &'static str,
     reference_max: usize,
     end_frame: bool,
@@ -322,21 +341,27 @@ struct EndpointSpec {
 fn endpoint_spec(endpoint: &str) -> Option<EndpointSpec> {
     match endpoint {
         "bytedance/seedance-2.0/fast/text-to-video" => Some(EndpointSpec {
-            mode: "text",
+            family: "bytedance/seedance-2.0/fast",
+            queue_app: "bytedance/seedance-2.0",
+            modality: "text-to-video",
             schema_hash: "seedance-2-fast-t2v-2026-07",
             reference_max: 0,
             end_frame: false,
             seed: false,
         }),
         "bytedance/seedance-2.0/fast/image-to-video" => Some(EndpointSpec {
-            mode: "image",
+            family: "bytedance/seedance-2.0/fast",
+            queue_app: "bytedance/seedance-2.0",
+            modality: "image-to-video",
             schema_hash: "seedance-2-fast-i2v-2026-07",
             reference_max: 0,
             end_frame: true,
             seed: false,
         }),
         "bytedance/seedance-2.0/fast/reference-to-video" => Some(EndpointSpec {
-            mode: "reference",
+            family: "bytedance/seedance-2.0/fast",
+            queue_app: "bytedance/seedance-2.0",
+            modality: "reference-to-video",
             schema_hash: "seedance-2-fast-r2v-2026-07",
             reference_max: 9,
             end_frame: false,
@@ -344,6 +369,84 @@ fn endpoint_spec(endpoint: &str) -> Option<EndpointSpec> {
         }),
         _ => None,
     }
+}
+
+fn configured_video_model_matches_endpoint(configured: &str, endpoint: &str) -> bool {
+    let Some(requested) = endpoint_spec(endpoint) else {
+        return false;
+    };
+    configured == requested.family
+        || endpoint_spec(configured).is_some_and(|candidate| candidate.family == requested.family)
+}
+
+fn video_request_contract(request: &FalVideoRequest) -> Value {
+    json!({
+        "endpoint": request.endpoint,
+        "schemaHash": request.schema_hash,
+        "prompt": request.prompt,
+        "duration": request.duration,
+        "resolution": request.resolution,
+        "aspectRatio": request.aspect_ratio,
+        "generateAudio": request.generate_audio,
+        "bitrateMode": request.bitrate_mode,
+        "seed": request.seed,
+        "startFrame": request.start_frame,
+        "endFrame": request.end_frame,
+        "references": request.references,
+    })
+}
+
+fn resume_request_from_manifest(manifest: &FalRunManifest) -> Result<FalVideoRequest, String> {
+    let contract_value = manifest
+        .request_snapshot
+        .input_fingerprint
+        .get("requestContract")
+        .cloned()
+        .ok_or("Dem gespeicherten fal-Run fehlt der unveränderliche Request-Vertrag.")?;
+    let contract: PersistedFalVideoRequestContract = serde_json::from_value(contract_value.clone())
+        .map_err(|_| "Der gespeicherte fal-Request-Vertrag ist ungültig.".to_string())?;
+    let request = FalVideoRequest {
+        run_id: manifest.run_id.clone(),
+        project_id: manifest.project_id.clone(),
+        node_id: manifest.node_id.clone(),
+        endpoint: manifest.endpoint.clone(),
+        schema_hash: manifest.schema_hash.clone(),
+        prompt: manifest.request_snapshot.prompt.clone(),
+        duration: manifest.request_snapshot.duration.clone(),
+        resolution: manifest.request_snapshot.resolution.clone(),
+        aspect_ratio: manifest.request_snapshot.aspect_ratio.clone(),
+        generate_audio: manifest.request_snapshot.generate_audio,
+        seed: manifest.request_snapshot.seed,
+        bitrate_mode: manifest.request_snapshot.bitrate_mode.clone(),
+        start_frame: contract.start_frame,
+        end_frame: contract.end_frame,
+        references: contract.references,
+        input_fingerprint: manifest.request_snapshot.input_fingerprint.clone(),
+        estimated_cost_microunits: manifest.request_snapshot.estimated_cost_microunits,
+        cost_estimate: manifest.request_snapshot.cost_estimate.clone(),
+        cost_context: manifest.request_snapshot.cost_context.clone(),
+    };
+    let contract_matches_snapshot = contract.endpoint == request.endpoint
+        && contract.schema_hash == request.schema_hash
+        && contract.prompt == request.prompt
+        && contract.duration == request.duration
+        && contract.resolution == request.resolution
+        && contract.aspect_ratio == request.aspect_ratio
+        && contract.generate_audio == request.generate_audio
+        && contract.bitrate_mode == request.bitrate_mode
+        && contract.seed == request.seed
+        && contract_value == video_request_contract(&request)
+        && manifest.request_snapshot.references
+            == request
+                .references
+                .iter()
+                .map(|value| media_fingerprint(value))
+                .collect::<Vec<_>>();
+    if !contract_matches_snapshot {
+        return Err("Der gespeicherte fal-Request-Vertrag passt nicht zum Run-Snapshot.".into());
+    }
+    validate_request(&request)?;
+    Ok(request)
 }
 
 fn validate_request(request: &FalVideoRequest) -> Result<EndpointSpec, String> {
@@ -375,8 +478,8 @@ fn validate_request(request: &FalVideoRequest) -> Result<EndpointSpec, String> {
             "Dauer, Auflösung oder Seitenverhältnis wird vom Endpoint nicht unterstützt.".into(),
         );
     }
-    if (spec.mode == "image") != request.start_frame.is_some() {
-        return Err(if spec.mode == "image" {
+    if (spec.modality == "image-to-video") != request.start_frame.is_some() {
+        return Err(if spec.modality == "image-to-video" {
             "Dieser Endpoint benötigt genau ein Startbild."
         } else {
             "Dieser Endpoint unterstützt kein Startbild."
@@ -387,7 +490,7 @@ fn validate_request(request: &FalVideoRequest) -> Result<EndpointSpec, String> {
         return Err("Dieser Endpoint unterstützt kein Endbild.".into());
     }
     if request.references.len() > spec.reference_max
-        || (spec.mode == "reference" && request.references.is_empty())
+        || (spec.modality == "reference-to-video" && request.references.is_empty())
     {
         return Err("Die Anzahl der Referenzbilder passt nicht zum Endpoint.".into());
     }
@@ -429,7 +532,7 @@ fn validate_request(request: &FalVideoRequest) -> Result<EndpointSpec, String> {
             .billable_config
             .as_object()
             .ok_or("Der Fal-Kostenkontext ist ungültig.")?;
-        if billable.get("modality").and_then(Value::as_str) != Some(spec.mode)
+        if billable.get("modality").and_then(Value::as_str) != Some(spec.modality)
             || billable.get("duration") != Some(&request.duration)
             || billable.get("resolution").and_then(Value::as_str)
                 != Some(request.resolution.as_str())
@@ -730,11 +833,46 @@ pub(crate) async fn checked_fal_json(
     Ok((body, billable))
 }
 
+/// Generic queue URL builder used by the image adapters, which already pass
+/// the audited queue app for control requests. Video endpoints use the stricter
+/// helpers below because their model path differs from their queue-control app.
 pub(crate) fn fal_queue_url(endpoint: &str, request_id: Option<&str>, suffix: &str) -> String {
     match request_id {
         Some(id) => format!("https://queue.fal.run/{endpoint}/requests/{id}{suffix}"),
         None => format!("https://queue.fal.run/{endpoint}"),
     }
+}
+
+fn fal_submit_url(endpoint: &str) -> Result<String, String> {
+    endpoint_spec(endpoint)
+        .map(|_| format!("https://queue.fal.run/{endpoint}"))
+        .ok_or("Dieser fal.ai-Endpoint besitzt keinen geprüften FlowZ-Adapter.".into())
+}
+
+#[derive(Clone, Copy)]
+enum FalQueueRequestAction {
+    Result,
+    Status,
+    Cancel,
+}
+
+fn fal_queue_request_url(
+    endpoint: &str,
+    request_id: &str,
+    action: FalQueueRequestAction,
+) -> Result<String, String> {
+    let spec = endpoint_spec(endpoint)
+        .ok_or("Dieser fal.ai-Endpoint besitzt keinen geprüften FlowZ-Adapter.")?;
+    Uuid::parse_str(request_id).map_err(|_| "Fal-Request-ID ist ungültig.".to_string())?;
+    let suffix = match action {
+        FalQueueRequestAction::Result => "",
+        FalQueueRequestAction::Status => "/status",
+        FalQueueRequestAction::Cancel => "/cancel",
+    };
+    Ok(format!(
+        "https://queue.fal.run/{}/requests/{request_id}{suffix}",
+        spec.queue_app
+    ))
 }
 
 async fn submit_and_wait(
@@ -771,7 +909,7 @@ async fn submit_and_wait(
 
     let mut manifest = state.load(&request.run_id)?;
     let response = client
-        .post(fal_queue_url(&request.endpoint, None, ""))
+        .post(fal_submit_url(&request.endpoint)?)
         .header(header::AUTHORIZATION, format!("Key {key}"))
         .json(&input)
         .send()
@@ -840,7 +978,11 @@ async fn wait_existing(
         }
         let (status, _) = checked_fal_json(
             client
-                .get(fal_queue_url(endpoint, Some(request_id), "/status"))
+                .get(fal_queue_request_url(
+                    endpoint,
+                    request_id,
+                    FalQueueRequestAction::Status,
+                )?)
                 .header(header::AUTHORIZATION, format!("Key {key}"))
                 .send()
                 .await
@@ -865,7 +1007,11 @@ async fn wait_existing(
     }
     checked_fal_json(
         client
-            .get(fal_queue_url(endpoint, Some(request_id), ""))
+            .get(fal_queue_request_url(
+                endpoint,
+                request_id,
+                FalQueueRequestAction::Result,
+            )?)
             .header(header::AUTHORIZATION, format!("Key {key}"))
             .send()
             .await
@@ -1162,6 +1308,9 @@ fn media_fingerprint(value: &str) -> String {
 }
 
 fn target_is_current(request: &FalVideoRequest, persistence: &Persistence) -> bool {
+    if validate_request(request).is_err() {
+        return false;
+    }
     let Ok(project) = persistence
         .projects
         .open(&request.project_id)
@@ -1180,6 +1329,25 @@ fn target_is_current(request: &FalVideoRequest, persistence: &Persistence) -> bo
     let Some(snapshot) = request.input_fingerprint.as_object() else {
         return false;
     };
+    let request_contract = video_request_contract(request);
+    if !node
+        .config
+        .get("model")
+        .and_then(Value::as_str)
+        .is_some_and(|configured| {
+            configured_video_model_matches_endpoint(configured, &request.endpoint)
+        })
+        || !crate::execution_snapshot::matches(
+            &request.project_id,
+            &request.node_id,
+            &request.input_fingerprint,
+            persistence,
+            &["ai.video-generation"],
+            Some(&request_contract),
+        )
+    {
+        return false;
+    }
     if snapshot.get("nodeConfig") != Some(&Value::Object(node.config.clone())) {
         return false;
     }
@@ -1205,55 +1373,13 @@ fn target_is_current(request: &FalVideoRequest, persistence: &Persistence) -> bo
         .iter()
         .zip(expected_edges)
         .all(|(edge, expected)| {
-            if expected.get("sourceNodeId").and_then(Value::as_str)
-                != Some(edge.source_node_id.as_str())
-                || expected.get("sourcePortId").and_then(Value::as_str)
-                    != Some(edge.source_port_id.as_str())
-                || expected.get("targetPortId").and_then(Value::as_str)
-                    != Some(edge.target_port_id.as_str())
-                || expected.get("order").and_then(Value::as_u64) != Some(edge.order)
-            {
-                return false;
-            }
-            let Some(source) = project
-                .graph
-                .nodes
-                .iter()
-                .find(|node| node.id == edge.source_node_id)
-            else {
-                return false;
-            };
-            let expected_identity = expected
-                .get("identity")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let actual_identity = if source.module_id == "core.text-input" {
-                source
-                    .config
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .map(|text| format!("text-sha256:{:x}", Sha256::digest(text.as_bytes())))
-            } else if expected_identity == "config" {
-                if expected.get("sourceConfig") != Some(&Value::Object(source.config.clone())) {
-                    return false;
-                }
-                Some("config".into())
-            } else {
-                persistence
-                    .database
-                    .active_result_identity(&request.project_id, &source.id)
-                    .ok()
-                    .flatten()
-                    .map(|(result_id, blob, _)| {
-                        if expected_identity.starts_with("blob:") {
-                            blob.map(|hash| format!("blob:{hash}"))
-                                .unwrap_or_else(|| format!("result:{result_id}"))
-                        } else {
-                            format!("result:{result_id}")
-                        }
-                    })
-            };
-            Some(expected_identity) == actual_identity.as_deref()
+            expected.get("sourceNodeId").and_then(Value::as_str)
+                == Some(edge.source_node_id.as_str())
+                && expected.get("sourcePortId").and_then(Value::as_str)
+                    == Some(edge.source_port_id.as_str())
+                && expected.get("targetPortId").and_then(Value::as_str)
+                    == Some(edge.target_port_id.as_str())
+                && expected.get("order").and_then(Value::as_u64) == Some(edge.order)
         })
 }
 
@@ -1276,6 +1402,7 @@ pub async fn fal_video_resume(
     if matches!(manifest.phase, FalRunPhase::Cancelled | FalRunPhase::Failed) {
         return Err("Dieser fal.ai-Run kann nicht wiederaufgenommen werden.".into());
     }
+    let request = resume_request_from_manifest(&manifest)?;
     let request_id = manifest.request_id.clone().ok_or("Fal-Request-ID fehlt.")?;
     let token = CancellationToken::new();
     state
@@ -1312,27 +1439,6 @@ pub async fn fal_video_resume(
     }
     mutable.updated_at = Utc::now().to_rfc3339();
     state.save(&mutable)?;
-    let request = FalVideoRequest {
-        run_id: manifest.run_id,
-        project_id: manifest.project_id,
-        node_id: manifest.node_id,
-        endpoint: manifest.endpoint,
-        schema_hash: manifest.schema_hash,
-        prompt: manifest.request_snapshot.prompt,
-        duration: manifest.request_snapshot.duration,
-        resolution: manifest.request_snapshot.resolution,
-        aspect_ratio: manifest.request_snapshot.aspect_ratio,
-        generate_audio: manifest.request_snapshot.generate_audio,
-        seed: manifest.request_snapshot.seed,
-        bitrate_mode: manifest.request_snapshot.bitrate_mode,
-        start_frame: None,
-        end_frame: None,
-        references: Vec::new(),
-        input_fingerprint: manifest.request_snapshot.input_fingerprint,
-        estimated_cost_microunits: manifest.request_snapshot.estimated_cost_microunits,
-        cost_estimate: manifest.request_snapshot.cost_estimate,
-        cost_context: manifest.request_snapshot.cost_context,
-    };
     let output = finalize_video(&request, response, units, &state, &persistence, &token).await;
     state
         .active
@@ -1393,11 +1499,11 @@ pub async fn fal_cancel_run(
         let key = api_key()?;
         let client = api_client()?;
         let response = client
-            .put(fal_queue_url(
+            .put(fal_queue_request_url(
                 &manifest.endpoint,
-                Some(request_id),
-                "/cancel",
-            ))
+                request_id,
+                FalQueueRequestAction::Cancel,
+            )?)
             .header(header::AUTHORIZATION, format!("Key {key}"))
             .send()
             .await
@@ -1468,7 +1574,7 @@ pub fn extract_video_frame_result(
         "local/frame-extraction",
         &now,
     )?;
-    persistence.database.attach_result(&result_id, &run_id, &request.project_id, &request.node_id, "video-frame", None, Some(&blob), Some(&asset_id), None, Some(&json!({"sourceVideoHash": request.video_hash, "mode": request.mode, "seconds": seconds, "executionFingerprint": request.execution_fingerprint})), &now)?;
+    persistence.database.attach_result(&result_id, &run_id, &request.project_id, &request.node_id, "video-frame", None, Some(&blob), Some(&asset_id), None, Some(&json!({"sourceVideoHash": request.video_hash, "mode": request.mode, "seconds": seconds, "executionFingerprint": request.execution_fingerprint})), &now, false)?;
     persistence
         .database
         .set_active_result(&request.project_id, &request.node_id, &result_id)?;
@@ -1481,6 +1587,31 @@ pub fn extract_video_frame_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn set_video_execution_snapshot(
+        request: &mut FalVideoRequest,
+        config: &serde_json::Map<String, Value>,
+        project_revision: u64,
+    ) {
+        let contract = video_request_contract(request);
+        let execution = json!({
+            "moduleId": "ai.video-generation",
+            "moduleVersion": 1,
+            "config": config,
+            "inputs": []
+        })
+        .to_string();
+        request.input_fingerprint = json!({
+            "moduleId": "ai.video-generation",
+            "moduleVersion": 1,
+            "nodeConfig": config,
+            "connections": [],
+            "executionFingerprint": execution,
+            "projectRevision": project_revision,
+            "requestContract": contract
+        });
+    }
+
     #[test]
     fn provider_cost_accepts_both_fal_result_envelopes_and_rejects_invalid_values() {
         assert_eq!(
@@ -1500,12 +1631,331 @@ mod tests {
     #[test]
     fn endpoints_fail_closed_and_schema_is_pinned() {
         assert!(endpoint_spec("fal-ai/unknown").is_none());
+        let text = endpoint_spec("bytedance/seedance-2.0/fast/text-to-video").unwrap();
+        assert_eq!(text.schema_hash, "seedance-2-fast-t2v-2026-07");
+        assert_eq!(text.family, "bytedance/seedance-2.0/fast");
+        assert!(configured_video_model_matches_endpoint(
+            "bytedance/seedance-2.0/fast",
+            "bytedance/seedance-2.0/fast/reference-to-video"
+        ));
+        assert!(configured_video_model_matches_endpoint(
+            "bytedance/seedance-2.0/fast/text-to-video",
+            "bytedance/seedance-2.0/fast/image-to-video"
+        ));
+        assert!(!configured_video_model_matches_endpoint(
+            "bytedance/seedance-3.0/fast",
+            "bytedance/seedance-2.0/fast/text-to-video"
+        ));
+        assert!(!configured_video_model_matches_endpoint(
+            "bytedance/seedance-2.0/fast-evil",
+            "bytedance/seedance-2.0/fast/text-to-video"
+        ));
+        assert!(!configured_video_model_matches_endpoint(
+            "bytedance/seedance-2.0/fast",
+            "bytedance/seedance-2.0/fast/unknown-mode"
+        ));
+    }
+    #[test]
+    fn image_to_video_accepts_the_frontend_cost_context_contract() {
+        let mut request = FalVideoRequest {
+            run_id: Uuid::new_v4().to_string(),
+            project_id: "project".into(),
+            node_id: "video".into(),
+            endpoint: "bytedance/seedance-2.0/fast/image-to-video".into(),
+            schema_hash: "seedance-2-fast-i2v-2026-07".into(),
+            prompt: "A blue sphere moving slowly".into(),
+            duration: json!(4),
+            resolution: "480p".into(),
+            aspect_ratio: "16:9".into(),
+            generate_audio: false,
+            seed: None,
+            bitrate_mode: "standard".into(),
+            start_frame: Some("flowz-cas:start".into()),
+            end_frame: None,
+            references: Vec::new(),
+            input_fingerprint: json!({}),
+            estimated_cost_microunits: None,
+            cost_estimate: None,
+            cost_context: Some(crate::persistence::FalCostContext {
+                schema_version: 1,
+                pricing_manifest_version: 1,
+                billable_config: json!({
+                    "modality": "image-to-video",
+                    "duration": 4,
+                    "resolution": "480p",
+                    "generateAudio": false,
+                    "aspectRatio": "16:9",
+                    "bitrateMode": "standard"
+                }),
+            }),
+        };
+
+        assert!(validate_request(&request).is_ok());
+
+        request.cost_context.as_mut().unwrap().billable_config["modality"] = json!("image");
         assert_eq!(
-            endpoint_spec("bytedance/seedance-2.0/fast/text-to-video")
-                .unwrap()
-                .schema_hash,
-            "seedance-2-fast-t2v-2026-07"
+            validate_request(&request).unwrap_err(),
+            "Der Fal-Kostenkontext passt nicht zu den Videoparametern."
         );
+    }
+    #[test]
+    fn restart_resume_reconstructs_image_to_video_contract_and_keeps_target_current() {
+        use crate::persistence::{
+            CanvasPosition, CreateProjectRequest, GraphNode, SaveProjectRequest, UpdatePolicy,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let persistence = Persistence::initialize(root.path()).unwrap();
+        let created = persistence
+            .projects
+            .create(CreateProjectRequest {
+                name: "Resume video".into(),
+            })
+            .unwrap();
+        let mut project = created.project;
+        let config = serde_json::from_value::<serde_json::Map<String, Value>>(json!({
+            "model": "bytedance/seedance-2.0/fast",
+            "duration": 4,
+            "resolution": "480p",
+            "aspectRatio": "16:9",
+            "generateAudio": false,
+            "bitrateMode": "standard"
+        }))
+        .unwrap();
+        project.graph.nodes.push(GraphNode {
+            id: "video".into(),
+            module_id: "ai.video-generation".into(),
+            module_version: 1,
+            position: CanvasPosition { x: 0.0, y: 0.0 },
+            label: None,
+            label_id: None,
+            config: config.clone(),
+            update_policy: UpdatePolicy::Manual,
+        });
+        let saved = persistence
+            .projects
+            .save(SaveProjectRequest {
+                expected_updated_at: project.updated_at,
+                expected_revision: created.revision,
+                project: project.clone(),
+            })
+            .unwrap();
+        let mut request = FalVideoRequest {
+            run_id: Uuid::new_v4().to_string(),
+            project_id: project.id,
+            node_id: "video".into(),
+            endpoint: "bytedance/seedance-2.0/fast/image-to-video".into(),
+            schema_hash: "seedance-2-fast-i2v-2026-07".into(),
+            prompt: "A blue sphere moving slowly".into(),
+            duration: json!(4),
+            resolution: "480p".into(),
+            aspect_ratio: "16:9".into(),
+            generate_audio: false,
+            seed: None,
+            bitrate_mode: "standard".into(),
+            start_frame: Some("flowz-cas:start-frame-hash".into()),
+            end_frame: None,
+            references: Vec::new(),
+            input_fingerprint: Value::Null,
+            estimated_cost_microunits: None,
+            cost_estimate: None,
+            cost_context: None,
+        };
+        set_video_execution_snapshot(&mut request, &config, saved.revision);
+        assert!(target_is_current(&request, &persistence));
+
+        let now = Utc::now().to_rfc3339();
+        let state = FalProviderState::initialize(root.path()).unwrap();
+        state
+            .save(&FalRunManifest {
+                run_id: request.run_id.clone(),
+                project_id: request.project_id.clone(),
+                node_id: request.node_id.clone(),
+                endpoint: request.endpoint.clone(),
+                schema_hash: request.schema_hash.clone(),
+                phase: FalRunPhase::Queued,
+                request_id: Some(Uuid::new_v4().to_string()),
+                created_at: now.clone(),
+                updated_at: now,
+                error: None,
+                result_id: None,
+                video_hash: None,
+                start_frame_hash: None,
+                end_frame_hash: None,
+                video_asset_id: None,
+                start_result_id: None,
+                start_asset_id: None,
+                end_result_id: None,
+                end_asset_id: None,
+                request_snapshot: FalRequestSnapshot {
+                    prompt: request.prompt.clone(),
+                    duration: request.duration.clone(),
+                    resolution: request.resolution.clone(),
+                    aspect_ratio: request.aspect_ratio.clone(),
+                    generate_audio: request.generate_audio,
+                    seed: request.seed,
+                    bitrate_mode: request.bitrate_mode.clone(),
+                    input_fingerprint: request.input_fingerprint.clone(),
+                    references: Vec::new(),
+                    estimated_cost_microunits: None,
+                    cost_estimate: None,
+                    cost_context: None,
+                },
+            })
+            .unwrap();
+        drop(state);
+
+        let restarted = FalProviderState::initialize(root.path()).unwrap();
+        let loaded = restarted.load(&request.run_id).unwrap();
+        let resumed = resume_request_from_manifest(&loaded).unwrap();
+        assert_eq!(resumed.start_frame, request.start_frame);
+        assert_eq!(
+            video_request_contract(&resumed),
+            video_request_contract(&request)
+        );
+        assert!(target_is_current(&resumed, &persistence));
+
+        let mut inconsistent = loaded.clone();
+        inconsistent.request_snapshot.prompt = "A different prompt".into();
+        assert!(resume_request_from_manifest(&inconsistent).is_err());
+        let mut missing = loaded;
+        missing
+            .request_snapshot
+            .input_fingerprint
+            .as_object_mut()
+            .unwrap()
+            .remove("requestContract");
+        assert!(resume_request_from_manifest(&missing).is_err());
+    }
+    #[test]
+    fn video_target_accepts_audited_family_modes_and_rejects_contract_or_revision_change() {
+        use crate::persistence::{
+            CanvasPosition, CreateProjectRequest, GraphNode, SaveProjectRequest, UpdatePolicy,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let persistence = Persistence::initialize(root.path()).unwrap();
+        let created = persistence
+            .projects
+            .create(CreateProjectRequest {
+                name: "Video".into(),
+            })
+            .unwrap();
+        let expected_updated_at = created.project.updated_at;
+        let mut project = created.project;
+        let config = serde_json::from_value::<serde_json::Map<String, Value>>(json!({
+            "model": "bytedance/seedance-2.0/fast/text-to-video",
+            "duration": 5,
+            "resolution": "720p"
+        }))
+        .unwrap();
+        project.graph.nodes.push(GraphNode {
+            id: "video".into(),
+            module_id: "ai.video-generation".into(),
+            module_version: 1,
+            position: CanvasPosition { x: 0.0, y: 0.0 },
+            label: None,
+            label_id: None,
+            config: config.clone(),
+            update_policy: UpdatePolicy::Manual,
+        });
+        let saved = persistence
+            .projects
+            .save(SaveProjectRequest {
+                project: project.clone(),
+                expected_updated_at,
+                expected_revision: created.revision,
+            })
+            .unwrap();
+        let mut request = FalVideoRequest {
+            run_id: Uuid::new_v4().to_string(),
+            project_id: project.id.clone(),
+            node_id: "video".into(),
+            endpoint: "bytedance/seedance-2.0/fast/text-to-video".into(),
+            schema_hash: "seedance-2-fast-t2v-2026-07".into(),
+            prompt: "A quiet product film".into(),
+            duration: json!(5),
+            resolution: "720p".into(),
+            aspect_ratio: "16:9".into(),
+            generate_audio: false,
+            seed: None,
+            bitrate_mode: "standard".into(),
+            start_frame: None,
+            end_frame: None,
+            references: Vec::new(),
+            input_fingerprint: Value::Null,
+            estimated_cost_microunits: None,
+            cost_estimate: None,
+            cost_context: None,
+        };
+        set_video_execution_snapshot(&mut request, &config, saved.revision);
+        assert!(target_is_current(&request, &persistence));
+
+        request.endpoint = "bytedance/seedance-2.0/fast/image-to-video".into();
+        request.schema_hash = "seedance-2-fast-i2v-2026-07".into();
+        request.start_frame = Some("flowz-cas:start".into());
+        set_video_execution_snapshot(&mut request, &config, saved.revision);
+        assert!(validate_request(&request).is_ok());
+        assert!(target_is_current(&request, &persistence));
+
+        request.endpoint = "bytedance/seedance-2.0/fast/reference-to-video".into();
+        request.schema_hash = "seedance-2-fast-r2v-2026-07".into();
+        request.start_frame = None;
+        request.references = vec!["flowz-cas:reference".into()];
+        set_video_execution_snapshot(&mut request, &config, saved.revision);
+        assert!(validate_request(&request).is_ok());
+        assert!(target_is_current(&request, &persistence));
+
+        request.schema_hash = "seedance-2-fast-i2v-2026-07".into();
+        set_video_execution_snapshot(&mut request, &config, saved.revision);
+        assert!(!target_is_current(&request, &persistence));
+
+        request.endpoint = "bytedance/seedance-2.0/fast/image-to-video".into();
+        request.references.clear();
+        set_video_execution_snapshot(&mut request, &config, saved.revision);
+        assert!(validate_request(&request).is_err());
+        assert!(!target_is_current(&request, &persistence));
+
+        request.endpoint = "bytedance/seedance-2.0/fast/reference-to-video".into();
+        request.schema_hash = "seedance-2-fast-r2v-2026-07".into();
+        request.references = vec!["flowz-cas:reference".into()];
+        set_video_execution_snapshot(&mut request, &config, saved.revision);
+
+        let current = persistence.projects.open(&project.id).unwrap();
+        let mut family_project = current.project;
+        family_project.graph.nodes[0]
+            .config
+            .insert("model".into(), json!("bytedance/seedance-2.0/fast"));
+        let family_config = family_project.graph.nodes[0].config.clone();
+        let family_saved = persistence
+            .projects
+            .save(SaveProjectRequest {
+                expected_updated_at: family_project.updated_at,
+                expected_revision: current.revision,
+                project: family_project,
+            })
+            .unwrap();
+        set_video_execution_snapshot(&mut request, &family_config, family_saved.revision);
+        assert!(target_is_current(&request, &persistence));
+
+        request.prompt = "A changed product film".into();
+        assert!(!target_is_current(&request, &persistence));
+        request.prompt = "A quiet product film".into();
+
+        let current = persistence.projects.open(&project.id).unwrap();
+        let mut changed = current.project;
+        changed.graph.nodes[0]
+            .config
+            .insert("duration".into(), json!(10));
+        persistence
+            .projects
+            .save(SaveProjectRequest {
+                expected_updated_at: changed.updated_at,
+                expected_revision: current.revision,
+                project: changed,
+            })
+            .unwrap();
+        assert!(!target_is_current(&request, &persistence));
     }
     #[test]
     fn queue_url_and_seedance_payload_match_the_audited_contract() {
@@ -1540,9 +1990,44 @@ mod tests {
         assert!(validate_request(&request).is_ok());
         let payload = build_video_payload(&request);
         assert_eq!(
-            fal_queue_url(&request.endpoint, None, ""),
+            fal_submit_url(&request.endpoint).unwrap(),
             "https://queue.fal.run/bytedance/seedance-2.0/fast/reference-to-video"
         );
+        let request_id = "019f5c91-771c-7ab0-8226-d2d4b96686c9";
+        assert_eq!(
+            fal_queue_request_url(
+                &request.endpoint,
+                request_id,
+                FalQueueRequestAction::Status
+            )
+            .unwrap(),
+            "https://queue.fal.run/bytedance/seedance-2.0/requests/019f5c91-771c-7ab0-8226-d2d4b96686c9/status"
+        );
+        assert_eq!(
+            fal_queue_request_url(
+                &request.endpoint,
+                request_id,
+                FalQueueRequestAction::Result
+            )
+            .unwrap(),
+            "https://queue.fal.run/bytedance/seedance-2.0/requests/019f5c91-771c-7ab0-8226-d2d4b96686c9"
+        );
+        assert_eq!(
+            fal_queue_request_url(
+                &request.endpoint,
+                request_id,
+                FalQueueRequestAction::Cancel
+            )
+            .unwrap(),
+            "https://queue.fal.run/bytedance/seedance-2.0/requests/019f5c91-771c-7ab0-8226-d2d4b96686c9/cancel"
+        );
+        assert!(fal_submit_url("bytedance/seedance-2.0/fast/unknown").is_err());
+        assert!(fal_queue_request_url(
+            &request.endpoint,
+            "../../foreign-request",
+            FalQueueRequestAction::Status
+        )
+        .is_err());
         assert_eq!(payload["bitrate_mode"], "standard");
         assert!(payload.get("reference_image_urls").is_none());
         request.cost_estimate.as_mut().unwrap()["amountMicrounits"] = json!(1);

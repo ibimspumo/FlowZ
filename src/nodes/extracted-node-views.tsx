@@ -59,8 +59,9 @@ import {
   trimTransparentImage,
 } from "../api";
 import { executeListProcessing } from "../engine/list-execution";
-import { directMediaBindingFromConfig, resolveDirectMediaInputs } from "./direct-media";
+import { connectedInputEdgeCount, connectedInputPortIds, directMediaBindingFromConfig, resolveDirectMediaInputs } from "./direct-media";
 import {
+  appErrorMessage,
   formatNumber,
   formatDuration,
   localizeErrorMessage,
@@ -74,6 +75,7 @@ import {
 } from "../i18n-schema";
 import { AudioRecorderController, chooseBrowserAudioMimeType, type AudioRecorderDependencies } from "./core/audio-recorder";
 import { KeyboardPortAction } from "../components/KeyboardPortAction";
+import { currentExecutionSnapshot } from "./execution-snapshot";
 
 type RuntimeProps = NodeProps<FlowNode>;
 const socketColors: Record<string, string> = {
@@ -414,16 +416,29 @@ export function ImageInputBody(
       });
       let stored: Awaited<ReturnType<typeof storeLibraryResult>> | undefined;
       if (isDesktopRuntime()) {
-        const projectId = useFlowStore.getState().document?.id;
-        if (projectId)
+        const state = useFlowStore.getState();
+        const projectId = state.document?.id;
+        if (projectId) {
+          const revision = await state.flushPendingSave();
+          const executionSnapshot = await currentExecutionSnapshot(node.id, revision);
           stored = await storeLibraryResult({
             projectId,
             nodeId: node.id,
             kind: "image",
             dataUrl,
             originalName: file.name,
+            expectedRevision: revision,
+            inputFingerprint: executionSnapshot,
           });
+        }
       }
+      if (stored && !stored.active)
+        throw new Error(
+          appErrorMessage(
+            "project_changed",
+            "Das importierte Bild wurde gespeichert, aber nicht aktiviert.",
+          ),
+        );
       update({
         value: dataUrl,
         fileName: file.name,
@@ -571,7 +586,7 @@ function MediaInputBody(
           disabled={recording.status !== "idle"}
         >
           {operation ? (
-            <LoaderCircle className="spin" size={20} />
+            <Square size={20} />
           ) : (
             <Upload size={20} />
           )}
@@ -620,6 +635,12 @@ function ContextBody(
     controller.current = new AbortController();
     update({ status: "running", error: undefined }, false);
     try {
+      const state = useFlowStore.getState();
+      const desktop = isDesktopRuntime();
+      const revision = desktop ? await state.flushPendingSave() : undefined;
+      const executionSnapshot = revision == null
+        ? undefined
+        : await currentExecutionSnapshot(node.id, revision);
       const module = canonicalNodeRegistry.forKind(kind);
       const text = (
         kind === "webpage"
@@ -648,7 +669,9 @@ function ContextBody(
         output?.kind === "scalar" && output.value.type === "text"
           ? output.value.value
           : "";
-      const fingerprint = currentExecutionFingerprint(node.id);
+      const fingerprint =
+        executionSnapshot?.executionFingerprint ??
+        currentExecutionFingerprint(node.id);
       const screenshot =
         typeof result.metadata?.screenshotDataUrl === "string"
           ? result.metadata.screenshotDataUrl
@@ -680,11 +703,37 @@ function ContextBody(
               ? { dataUrl: screenshot, originalName: "webpage-screenshot.png" }
               : {}),
             parameters,
+            expectedRevision: revision!,
+            inputFingerprint: executionSnapshot!,
           })
         : undefined;
       const screenshotValue = stored?.blobHash
         ? `flowz-cas:${stored.blobHash}`
         : undefined;
+      const targetCurrent = stored ? stored.active : true;
+      const completedHistory = {
+        id: stored?.resultId ?? crypto.randomUUID(),
+        createdAt: stored?.createdAt ?? new Date().toISOString(),
+        value,
+        assetId: stored?.assetId,
+        blobHash: stored?.blobHash,
+        mediaType: stored?.mediaType,
+        parameters,
+        persisted: Boolean(stored),
+        active: targetCurrent,
+      };
+      if (!targetCurrent) {
+        update({
+          status: "stale",
+          persisted: Boolean(stored),
+          error: appErrorMessage(
+            "project_changed",
+            "Das Ergebnis wurde sicher gespeichert, aber nicht aktiviert.",
+          ),
+          history: [completedHistory, ...(node.data.history ?? [])],
+        });
+        return;
+      }
       update({
         status: "fresh",
         value,
@@ -698,17 +747,7 @@ function ContextBody(
         persisted: Boolean(stored),
         error: undefined,
         history: [
-          {
-            id: stored?.resultId ?? crypto.randomUUID(),
-            createdAt: stored?.createdAt ?? new Date().toISOString(),
-            value,
-            assetId: stored?.assetId,
-            blobHash: stored?.blobHash,
-            mediaType: stored?.mediaType,
-            parameters,
-            persisted: Boolean(stored),
-            active: true,
-          },
+          completedHistory,
           ...(node.data.history ?? []).map((item) => ({
             ...item,
             active: false,
@@ -813,15 +852,18 @@ function ContextBody(
       <button
         type="button"
         className="run-button"
-        disabled={node.data.status === "running"}
-        onClick={() => void execute()}
+        onClick={
+          node.data.status === "running"
+            ? () => controller.current?.abort()
+            : () => void execute()
+        }
       >
         {node.data.status === "running" ? (
-          <LoaderCircle className="spin" size={15} />
+          <Square size={15} />
         ) : (
           <Play size={15} />
         )}{" "}
-        {t("node.execute")}
+        {node.data.status === "running" ? t("node.cancel") : t("node.execute")}
       </button>
     </Frame>
   );
@@ -859,6 +901,7 @@ function NativeOperationBody(
           : resolveDirectMediaInputs(
               listImages.length ? listImages : scalarImages,
               directMediaBindingFromConfig(graph.config),
+              connectedInputEdgeCount(state.edges, node.id, ["image", "imageLists"]),
             ),
         raw = kind === "videoFrame"
           ? inputsForPort(node.id, "video")
@@ -900,6 +943,7 @@ function NativeOperationBody(
       const result = await dispatchAppNodeExecution(module, graph, {
         signal: controller.current.signal,
         inputs,
+        connectedInputPorts: connectedInputPortIds(state.edges, node.id),
         services: {
           listMap: { execute: executeListProcessing },
           videoFrame: {
@@ -1172,7 +1216,7 @@ function NativeOperationBody(
       >
         {node.data.status === "running" ? (
           <>
-            <LoaderCircle className="spin" size={15} />
+            <Square size={15} />
             {t("node.cancel")}
           </>
         ) : (

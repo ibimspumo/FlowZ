@@ -133,3 +133,60 @@ pub(crate) fn sync_directory(path: &Path) -> Result<(), String> {
         .and_then(|directory| directory.sync_all())
         .map_err(|error| error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restart_preserves_font_provenance_blobs_and_repairs_a_missing_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let persistence = Persistence::initialize(root.path()).unwrap();
+        let font = persistence
+            .blobs
+            .import_bytes(b"test-font", "font/ttf".into(), Some("Test.ttf".into()))
+            .unwrap();
+        let license = persistence
+            .blobs
+            .import_bytes(b"test-license", "text/plain".into(), Some("OFL.txt".into()))
+            .unwrap();
+        persistence.database.upsert_blob(&font).unwrap();
+        persistence.database.upsert_blob(&license).unwrap();
+        persistence
+            .database
+            .record_font_provenance(
+                &font.hash,
+                &license.hash,
+                &serde_json::json!({"family":"Test"}),
+                &serde_json::json!({"axes":{}}),
+            )
+            .unwrap();
+        drop(persistence);
+
+        // A normal restart must not classify font/license blobs as orphans. This was
+        // the production startup crash: take_unreferenced_blobs tried to DELETE both
+        // rows and collided with font_provenance's RESTRICT foreign keys.
+        let restarted = Persistence::initialize(root.path()).unwrap();
+        assert!(restarted.database.contains_blob(&font.hash).unwrap());
+        assert!(restarted.database.contains_blob(&license.hash).unwrap());
+        assert!(restarted
+            .database
+            .font_provenance(&font.hash)
+            .unwrap()
+            .is_some());
+
+        // If one physical cache object really is lost, the provenance pair is no
+        // longer usable. Reconciliation should remove that cache metadata and both
+        // now-unreferenced database/CAS entries instead of making startup fatal.
+        restarted.blobs.remove_untracked(&font.hash).unwrap();
+        drop(restarted);
+        let repaired = Persistence::initialize(root.path()).unwrap();
+        assert!(!repaired.database.contains_blob(&font.hash).unwrap());
+        assert!(!repaired.database.contains_blob(&license.hash).unwrap());
+        assert!(repaired
+            .database
+            .font_provenance(&font.hash)
+            .unwrap()
+            .is_none());
+    }
+}

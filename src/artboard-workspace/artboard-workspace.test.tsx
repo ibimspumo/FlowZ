@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { ARTBOARD_DOCUMENT_VERSION, ARTBOARD_WORKSPACE_VERSION, type ArtboardWorkspace as Workspace } from "../nodes/brand/artboard-domain";
 import { ArtboardWorkspace, shouldHandleArtboardCanvasShortcut } from "./ArtboardWorkspace";
+import { layerKeyboardGeometryPatch } from "./ArtboardCanvas";
 import { clampLayerGeometry, compareBoardIds, operationBatch, orderedBoardSelection, releaseGesturePreview, updateGesturePreview } from "./operations";
 import { setLocale } from "../i18n";
 
@@ -21,6 +23,15 @@ describe("artboard workspace UI foundation", () => {
     expect(shouldHandleArtboardCanvasShortcut("ArrowRight", true, true)).toBe(false);
     expect(shouldHandleArtboardCanvasShortcut("ArrowRight", false, false)).toBe(false);
     expect(shouldHandleArtboardCanvasShortcut("ArrowRight", true, false)).toBe(true);
+  });
+  it("provides keyboard geometry actions and non-overlapping narrow panels", () => {
+    expect(layerKeyboardGeometryPatch("ArrowRight", false)).toEqual({x:1});
+    expect(layerKeyboardGeometryPatch("ArrowUp", true, 10)).toEqual({height:-10});
+    expect(layerKeyboardGeometryPatch("Enter", false)).toBeUndefined();
+    const css=readFileSync(new URL("./artboard-workspace.css",import.meta.url),"utf8");
+    expect(css).toMatch(/\.awb-shell\.has-left\.has-right \.awb-left-panel,[\s\S]*?width:\s*50vw/);
+    expect(css).toContain('.awb-layer-list button:focus-visible');
+    expect(css).toContain('.awb-fields input:focus-visible');
   });
   it("keeps active board separate from ordered multi-selection", () => {
     expect(orderedBoardSelection(workspace, "a", true)).toEqual({ activeBoardId: "b", selectedBoardIds: ["b"] });
@@ -56,6 +67,8 @@ describe("artboard workspace UI foundation", () => {
     expect(html).toContain("Board a");
     expect(html).toContain('accept="image/*"');
     expect(html).toContain("Artboard entfernen");
+    expect(html).toContain('aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Shift+ArrowUp Shift+ArrowDown Shift+ArrowLeft Shift+ArrowRight"');
+    expect(html).toContain('aria-pressed="false"');
     expect(html).not.toContain("Agent-Modell und Einstellungen");
     expect(html).not.toContain("dialog");
   });

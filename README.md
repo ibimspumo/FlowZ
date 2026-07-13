@@ -161,9 +161,9 @@ Unter **Einstellungen → FlowZ Updates** wird manuell nach Updates gesucht. Dow
 Ein Release-Tag muss exakt zur Version in `package.json`, `src-tauri/tauri.conf.json` und `src-tauri/Cargo.toml` passen:
 
 ```bash
-corepack pnpm run verify:release -- v0.1.1
-git tag v0.1.1
-git push origin v0.1.1
+corepack pnpm run verify:release -- v0.1.3
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 Die GitHub Action veröffentlicht DMG, Tauri-Updater-Archiv, Signatur, `latest.json` und `SHA256SUMS.txt`. FFmpeg und FFprobe bleiben Bestandteil der App und werden nicht als eigene Nutzerdownloads veröffentlicht.

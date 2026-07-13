@@ -47,6 +47,8 @@ import { classifyRunError, visibleRunErrorMessage } from "../components/run-erro
 import { PaidExecutionConflictError, pendingPaidRunState, runPaidNodeOnce } from "./paid-execution-gate";
 import { falExecutionFailure } from "./fal-execution-failure";
 import { KeyboardPortAction } from "../components/KeyboardPortAction";
+import { connectedInputPortIds } from "./direct-media";
+import { runtimeValuesFromDisplay } from "./runtime-display-values";
 
 export type FalRuntimeNode = NodeProps<FlowNode>;
 const colors: Record<string, string> = {
@@ -240,22 +242,7 @@ function runtimeInputs(
     result: Record<string, RuntimeValue[]> = {};
   for (const port of definition.inputs) {
     const raw = state.inputsForPort(nodeId, port.id);
-    result[port.id] = raw.map((value) => {
-      if (port.type === "text")
-        return { kind: "scalar", value: { type: "text", value } };
-      if (port.type === "json") {
-        let parsed: JsonValue = value;
-        try {
-          parsed = JSON.parse(value) as JsonValue;
-        } catch {}
-        return { kind: "scalar", value: { type: "json", value: parsed } };
-      }
-      const type = port.type === "video" ? "video" : "image";
-      return {
-        kind: "scalar",
-        value: { type, assetId: value.replace(/^flowz-cas:/, "") },
-      };
-    });
+    result[port.id] = runtimeValuesFromDisplay(raw, port.type);
   }
   return result;
 }
@@ -300,7 +287,7 @@ export function commitFalMedia(
     model: String(node.data.model ?? "fal.ai"),
     prompt: String(node.data.prompt ?? ""),
     cost:
-      payload.costMicrounits == null
+      payload.costMicrounits == null || index > 0
         ? undefined
         : payload.costMicrounits / 1_000_000,
     costProvenance: payload.costProvenance,
@@ -344,7 +331,7 @@ export function commitFalMedia(
           ...history,
           ...(node.data.history ?? []).map((item) => ({
             ...item,
-            active: false,
+            active: payload.targetCurrent ? false : item.active,
           })),
         ],
         cost: history[0].cost,
@@ -397,11 +384,10 @@ export function useFalExecution(node: FalRuntimeNode) {
       const result = await dispatchAppNodeExecution(module, graph, {
         signal: active.signal,
         inputs: runtimeInputs(node.id, node.data.kind),
+        connectedInputPorts: connectedInputPortIds(state.edges, node.id),
         services: { fal: createFalExecutionServices(projectId) },
       });
       const metadata = metadataRecord(result.metadata);
-      if (metadata.targetCurrent === false)
-        throw new Error(appErrorMessage("project_changed", "Das bezahlte Ergebnis bleibt sicher gespeichert und wurde nicht aktiviert."));
       const output = result.outputs.image ?? result.outputs.video;
       if (
         !output ||
@@ -438,7 +424,7 @@ export function useFalExecution(node: FalRuntimeNode) {
       }));
       commitFalMedia(node, {
         runId: String(metadata.runId ?? ""),
-        targetCurrent: true,
+        targetCurrent: metadata.targetCurrent !== false,
         items,
         kind,
         costMicrounits:

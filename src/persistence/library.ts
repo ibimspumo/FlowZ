@@ -59,6 +59,8 @@ export type StoreLibraryResult = {
   costMicrounits?: number;
   prompt?: string;
   parameters?: Record<string, string | number | boolean>;
+  expectedRevision?: number;
+  inputFingerprint?: Record<string, unknown>;
 };
 
 export async function storeLibraryResult(request: StoreLibraryResult): Promise<LibraryResult> {

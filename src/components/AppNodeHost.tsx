@@ -17,7 +17,10 @@ export function AppNodeHost({
   status: NodeStatus;
   runtimeProps?: unknown;
 }) {
-  if (!node) throw new Error(`Graph node is missing for module ${module.id}.`);
+  // React Flow may keep a removed canvas node alive for one render while the
+  // canonical graph has already committed its deletion. That transition is
+  // expected and must never take down the canvas.
+  if (!node) return null;
   const viewNode = nodeForModuleView(module, node);
   const Body = module.Body;
   const body = <Body node={viewNode} selected={selected} runtimeProps={runtimeProps} />;

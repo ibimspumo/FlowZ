@@ -5,7 +5,6 @@ use keyring::Entry;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     io::{Read, Write},
@@ -20,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 mod artboard_agent;
 mod artboard_composite;
 mod brand;
+mod execution_snapshot;
 mod export;
 mod fal_image;
 mod fal_image_tools;
@@ -151,6 +151,8 @@ struct StoreResultRequest {
     cost_microunits: Option<i64>,
     prompt: Option<String>,
     parameters: Option<Value>,
+    expected_revision: Option<u64>,
+    input_fingerprint: Option<Value>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -181,168 +183,36 @@ fn paid_brand_target_current(
     persistence: &Persistence,
     expected_module: &str,
 ) -> bool {
-    let Ok(project) = persistence
-        .projects
-        .open(&request.project_id)
-        .map(|record| record.project)
-    else {
-        return false;
-    };
-    let Some(node) = project
-        .graph
-        .nodes
-        .iter()
-        .find(|node| node.id == request.node_id && node.module_id == expected_module)
-    else {
-        return false;
-    };
-    if node.config.get("model").and_then(Value::as_str) != Some(request.model.as_str()) {
-        return false;
-    }
     let Some(parameters) = request.parameters.as_object() else {
         return false;
     };
-    let Some(snapshot) = parameters
-        .get("inputFingerprint")
-        .and_then(Value::as_object)
-    else {
+    let Some(snapshot) = parameters.get("inputFingerprint") else {
         return false;
     };
-    if parameters.get("executionFingerprint") != snapshot.get("executionFingerprint")
-        || snapshot.get("nodeConfig") != Some(&Value::Object(node.config.clone()))
-    {
-        return false;
-    }
-    let Some(fingerprint) = parameters
-        .get("executionFingerprint")
-        .and_then(Value::as_str)
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-    else {
-        return false;
-    };
-    if fingerprint.get("moduleId").and_then(Value::as_str) != Some(expected_module)
-        || fingerprint.get("moduleVersion").and_then(Value::as_u64)
-            != Some(u64::from(node.module_version))
-        || fingerprint.get("config") != Some(&Value::Object(node.config.clone()))
-    {
-        return false;
-    }
-    let Some(expected_edges) = snapshot.get("connections").and_then(Value::as_array) else {
-        return false;
-    };
-    let mut actual_edges = project
-        .graph
-        .edges
-        .iter()
-        .filter(|edge| edge.target_node_id == request.node_id)
-        .collect::<Vec<_>>();
-    actual_edges.sort_by(|a, b| {
-        a.target_port_id
-            .cmp(&b.target_port_id)
-            .then(a.order.cmp(&b.order))
-            .then(a.id.cmp(&b.id))
-    });
-    if actual_edges.len() != expected_edges.len() {
-        return false;
-    }
-    let Some(fingerprint_inputs) = fingerprint.get("inputs").and_then(Value::as_array) else {
-        return false;
-    };
-    if fingerprint_inputs.len() != actual_edges.len() {
-        return false;
-    }
-    for (edge, input) in actual_edges.iter().zip(fingerprint_inputs) {
-        if input.get("sourceNodeId").and_then(Value::as_str) != Some(edge.source_node_id.as_str())
-            || input.get("sourcePortId").and_then(Value::as_str)
-                != Some(edge.source_port_id.as_str())
-            || input.get("targetPortId").and_then(Value::as_str)
-                != Some(edge.target_port_id.as_str())
-            || input.get("order").and_then(Value::as_u64) != Some(edge.order)
-        {
-            return false;
-        }
-        let Some(source) = project
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.id == edge.source_node_id)
-        else {
-            return false;
-        };
-        let value = if source.module_id == "core.text-input" {
-            source.config.get("text").cloned().unwrap_or(Value::Null)
-        } else {
-            persistence
-                .database
-                .active_result_identity(&request.project_id, &source.id)
-                .ok()
-                .flatten()
-                .map(|(_, blob, text)| {
-                    blob.map(|hash| Value::String(format!("flowz-cas:{hash}")))
-                        .or_else(|| text.map(Value::String))
-                        .unwrap_or(Value::Null)
-                })
-                .or_else(|| source.config.get("blobHash").cloned())
-                .unwrap_or(Value::Null)
-        };
-        if input.get("value") != Some(&value) {
-            return false;
-        }
-    }
-    actual_edges
-        .iter()
-        .zip(expected_edges)
-        .all(|(edge, expected)| {
-            if expected.get("sourceNodeId").and_then(Value::as_str)
-                != Some(edge.source_node_id.as_str())
-                || expected.get("sourcePortId").and_then(Value::as_str)
-                    != Some(edge.source_port_id.as_str())
-                || expected.get("targetPortId").and_then(Value::as_str)
-                    != Some(edge.target_port_id.as_str())
-                || expected.get("order").and_then(Value::as_u64) != Some(edge.order)
-            {
-                return false;
-            }
-            let Some(source) = project
+    let current = persistence
+        .projects
+        .open(&request.project_id)
+        .ok()
+        .and_then(|opened| {
+            opened
+                .project
                 .graph
                 .nodes
-                .iter()
-                .find(|node| node.id == edge.source_node_id)
-            else {
-                return false;
-            };
-            let expected_identity = expected
-                .get("identity")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let actual = if source.module_id == "core.text-input" {
-                source
-                    .config
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .map(|text| format!("text-sha256:{:x}", Sha256::digest(text.as_bytes())))
-            } else if expected_identity == "config" {
-                if expected.get("sourceConfig") != Some(&Value::Object(source.config.clone())) {
-                    return false;
-                }
-                Some("config".into())
-            } else {
-                persistence
-                    .database
-                    .active_result_identity(&request.project_id, &source.id)
-                    .ok()
-                    .flatten()
-                    .map(|(result_id, blob, _)| {
-                        if expected_identity.starts_with("blob:") {
-                            blob.map(|hash| format!("blob:{hash}"))
-                                .unwrap_or_else(|| format!("result:{result_id}"))
-                        } else {
-                            format!("result:{result_id}")
-                        }
-                    })
-            };
-            Some(expected_identity) == actual.as_deref()
+                .into_iter()
+                .find(|node| node.id == request.node_id && node.module_id == expected_module)
         })
+        .is_some_and(|node| {
+            node.config.get("model").and_then(Value::as_str) == Some(request.model.as_str())
+        });
+    current
+        && execution_snapshot::matches(
+            &request.project_id,
+            &request.node_id,
+            snapshot,
+            persistence,
+            &[expected_module],
+            None,
+        )
 }
 
 #[tauri::command]
@@ -2489,7 +2359,7 @@ fn library_delete_project(
 
 #[tauri::command]
 fn library_store_result(
-    request: StoreResultRequest,
+    mut request: StoreResultRequest,
     persistence: tauri::State<'_, Persistence>,
 ) -> Result<LibraryResult, String> {
     if request.project_id.is_empty() || request.node_id.is_empty() {
@@ -2540,19 +2410,51 @@ fn library_store_result(
     if request.text.is_none() && blob.is_none() {
         return Err("Das Ergebnis enthält weder Text noch Bilddaten.".into());
     }
-    let stored = persistence.database.attach_result(
-        &result_id,
-        &run_id,
-        &request.project_id,
-        &request.node_id,
-        &request.kind,
-        request.text.as_deref(),
-        blob.as_ref(),
-        asset_id.as_deref(),
-        request.prompt.as_deref(),
-        request.parameters.as_ref(),
-        &created_at,
-    )?;
+    if let Some(snapshot) = request.input_fingerprint.clone() {
+        let parameters = request.parameters.get_or_insert_with(|| json!({}));
+        if let Some(object) = parameters.as_object_mut() {
+            object.insert("inputFingerprint".into(), snapshot.clone());
+            if let Some(execution) = snapshot.get("executionFingerprint") {
+                object.insert("executionFingerprint".into(), execution.clone());
+            }
+        }
+    }
+    let activation = request
+        .expected_revision
+        .zip(request.input_fingerprint.as_ref())
+        .and_then(|(_, snapshot)| {
+            let module_id = snapshot.get("moduleId")?.as_str()?.to_owned();
+            execution_snapshot::matches(
+                &request.project_id,
+                &request.node_id,
+                snapshot,
+                &persistence,
+                &[module_id.as_str()],
+                None,
+            )
+            .then_some(module_id)
+        });
+    let attach = |activate| {
+        persistence.database.attach_result(
+            &result_id,
+            &run_id,
+            &request.project_id,
+            &request.node_id,
+            &request.kind,
+            request.text.as_deref(),
+            blob.as_ref(),
+            asset_id.as_deref(),
+            request.prompt.as_deref(),
+            request.parameters.as_ref(),
+            &created_at,
+            activate,
+        )
+    };
+    let stored = if activation.is_some() {
+        attach(true)?
+    } else {
+        attach(false)?
+    };
     Ok(LibraryResult {
         stored,
         data_url: request.data_url,

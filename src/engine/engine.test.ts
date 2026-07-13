@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GraphEdge, GraphNode } from '../domain/project';
 import { InvalidLegacyProjectError, InvalidProjectDocumentError, migrateProject, migrateV1ToV2, UnsupportedSchemaVersionError } from '../domain/migrations';
-import { isRuntimeValue, isValueType, listType, listValue, scalarType } from '../domain/values';
+import { artifactType, isRuntimeValue, isValueType, listType, listValue, scalarType } from '../domain/values';
 import { acceptsRuntimeValue, areValueTypesCompatible, hasInputCapacity } from './compatibility';
 import { canonicalStringify, createNodeFingerprintPayload, sha256Fingerprint } from './fingerprint';
 import { findCycle, validateGraph, wouldCreateCycle } from './graph';
@@ -83,7 +83,19 @@ describe('value compatibility', () => {
     expect(isRuntimeValue({ kind: 'scalar', value: { type: 'json', value: new Date() } })).toBe(false);
     expect(isValueType({ kind: 'scalar', scalar: 'bogus' })).toBe(false);
     expect(isValueType({ kind: 'list', item: 'image' })).toBe(true);
+    expect(isValueType({kind:'scalar',scalar:'json',artifact:'flowz.brand-brief'})).toBe(true);
+    expect(isValueType({kind:'scalar',scalar:'text',artifact:'flowz.brand-brief'})).toBe(false);
     expect(() => listValue('text', [{ type: 'image', assetId: 'a' }])).toThrow(TypeError);
+  });
+
+  it('requires exact artifact identity between ports without rewriting runtime JSON',()=>{
+    const brief=artifactType('flowz.brand-brief');
+    const audience=artifactType('flowz.audience-analysis');
+    expect(areValueTypesCompatible(brief,artifactType('flowz.brand-brief'))).toBe(true);
+    expect(areValueTypesCompatible(brief,audience)).toBe(false);
+    expect(areValueTypesCompatible(brief,scalarType('json'))).toBe(false);
+    const input:NodePort={id:'brief',label:'Brief',valueType:brief};
+    expect(acceptsRuntimeValue(input,{kind:'scalar',value:{type:'json',value:{artifact:'flowz.brand-brief'}}})).toBe(true);
   });
 
   it('rejects malformed runtime media and non-JSON scalar extras', () => {

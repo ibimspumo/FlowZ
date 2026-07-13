@@ -69,7 +69,7 @@ export function directMediaBindingFromConfig(config: Record<string, JsonValue>):
 
 export type DirectMediaResolution = {
   values: string[];
-  source: "cable" | "local-fallback" | "local-override" | "none";
+  source: "cable" | "cable-empty" | "local-fallback" | "local-override" | "none";
   /** Non-zero means an intentional override shadowed connected values. */
   shadowedCableCount: number;
 };
@@ -78,13 +78,37 @@ export type DirectMediaResolution = {
 export function resolveDirectMediaInputs(
   connected: readonly string[],
   binding: DirectMediaBinding | undefined,
+  connectedEdgeCount = connected.length ? 1 : 0,
 ): DirectMediaResolution {
   if (binding?.priority === "override") {
-    return { values: [`flowz-cas:${binding.blobHash}`], source: "local-override", shadowedCableCount: connected.length };
+    return { values: [`flowz-cas:${binding.blobHash}`], source: "local-override", shadowedCableCount: Math.max(connected.length, connectedEdgeCount) };
   }
   if (connected.length) return { values: [...connected], source: "cable", shadowedCableCount: 0 };
+  // An explicit graph edge owns precedence even while its upstream result is
+  // missing/stale. Falling through to a local fallback would execute a visibly
+  // different graph than the one shown on the canvas.
+  if (connectedEdgeCount > 0) return { values: [], source: "cable-empty", shadowedCableCount: 0 };
   if (binding) return { values: [`flowz-cas:${binding.blobHash}`], source: "local-fallback", shadowedCableCount: 0 };
   return { values: [], source: "none", shadowedCableCount: 0 };
+}
+
+export function connectedInputPortIds(
+  edges: readonly { target: string; targetHandle?: string | null }[],
+  nodeId: string,
+): ReadonlySet<string> {
+  return new Set(edges
+    .filter((edge) => edge.target === nodeId)
+    .map((edge) => edge.targetHandle?.split("::")[0])
+    .filter((port): port is string => Boolean(port)));
+}
+
+export function connectedInputEdgeCount(
+  edges: readonly { target: string; targetHandle?: string | null }[],
+  nodeId: string,
+  ports: readonly string[],
+): number {
+  const accepted = new Set(ports);
+  return edges.filter((edge) => edge.target === nodeId && accepted.has(edge.targetHandle?.split("::")[0] ?? "")).length;
 }
 
 export function directMediaConfigField(value: JsonValue): boolean {

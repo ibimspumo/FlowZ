@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activatedImageOutputs, activatedTextOutputs, activatedVideoOutputs, fanOutVideoValues, summarizeHistoryCosts } from './result-curation';
+import { activatedImageOutputs, activatedTextOutputs, activatedVideoOutputs, fanOutValues, fanOutVideoValues, summarizeHistoryCosts } from './result-curation';
 import type { HistoryItem } from '../types';
 
 const item = (patch: Partial<HistoryItem>): HistoryItem => ({ id: crypto.randomUUID(), createdAt: '2026-01-01T00:00:00Z', value: '', persisted: true, ...patch });
@@ -10,6 +10,15 @@ describe('video curation and honest node costs', () => {
     const single = [item({ id:'one',runId:'run-1',blobHash:hash('a'),mediaType:'image/png' })];
     expect(activatedImageOutputs(single,'one')).toEqual({image:`flowz-cas:${hash('a')}`});
     expect(activatedImageOutputs([...single,item({id:'two',runId:'run-1',blobHash:hash('b'),mediaType:'image/png'})],'one')).toMatchObject({images:[`flowz-cas:${hash('a')}`,`flowz-cas:${hash('b')}`]});
+  });
+  it('prefers the immutable CAS reference over an available image preview', () => {
+    const hash = 'A'.repeat(64);
+    expect(fanOutValues([item({
+      id: 'preview-and-cas', value: 'data:image/png;base64,PREVIEW', blobHash: hash, mediaType: 'image/png',
+    })])).toEqual({
+      images: [`flowz-cas:${hash.toLowerCase()}`],
+      'variant:preview-and-cas': `flowz-cas:${hash.toLowerCase()}`,
+    });
   });
   it('exposes immutable video variants without scalar fallback', () => {
     expect(fanOutVideoValues([item({ id: 'v', blobHash: 'a'.repeat(64), mediaType: 'video/mp4' })])).toEqual({ videos: [`flowz-cas:${'a'.repeat(64)}`], 'variant:v': `flowz-cas:${'a'.repeat(64)}` });

@@ -1,5 +1,4 @@
 import { registry } from '../registry';
-import type { DataType } from '../types';
 import type { CanvasTemplate } from './types';
 import { defaultFalImageConfig, falImageModel, validateFalImageConfig, type FalImageConfig } from '../nodes/image/capabilities';
 import { BACKGROUND_REMOVAL_TOOL, defaultUpscaleConfig, falImageTool, validateUpscaleConfig, type UpscaleConfig } from '../nodes/image/tool-capabilities';
@@ -7,10 +6,9 @@ import { falVideoCapability, validateFalVideoConfig, type FalVideoEndpointConfig
 import { validateImageTransform, type ImageTransformRecipe } from '../nodes/image/transform';
 import { canonicalNodeRegistry } from '../nodes';
 import { materializedTemplateEdgeOrders } from './edge-order';
+import { areProductPortsCompatible } from '../engine/compatibility';
 
 export type TemplateIssue = { path: string; message: string };
-
-function compatible(output: DataType, input: DataType) { return output === input; }
 
 export const PAID_TEMPLATE_KINDS = new Set([
   'research','textGeneration','imageGeneration','imageUpscale','backgroundRemoval','videoGeneration','imageAnalysis','transcription',
@@ -100,7 +98,7 @@ export function validateTemplate(template: CanvasTemplate): TemplateIssue[] {
     const input = targetDefinition.inputs.find((port) => port.id === edge.targetPort);
     if (!output) issues.push({ path: `edges[${index}].sourcePort`, message: 'Ausgang ist nicht verfügbar.' });
     if (!input) issues.push({ path: `edges[${index}].targetPort`, message: 'Eingang ist nicht verfügbar.' });
-    if (output && input && !compatible(output.type, input.type)) issues.push({ path: `edges[${index}]`, message: `${output.type} kann nicht mit ${input.type} verbunden werden.` });
+    if (output && input && !areProductPortsCompatible(output,input)) issues.push({ path: `edges[${index}]`, message: `${output.artifact??output.type} kann nicht mit ${input.artifact??input.type} verbunden werden.` });
     const targetKey = `${edge.target}\0${edge.targetPort}`;
     if (input && !input.multiple && occupied.has(targetKey)) issues.push({ path: `edges[${index}]`, message: 'Ein einzelner Eingang ist mehrfach belegt.' });
     if (edge.order !== undefined && (!Number.isSafeInteger(edge.order) || edge.order < 0)) issues.push({path:`edges[${index}].order`,message:'Reihenfolge muss eine nicht-negative Ganzzahl sein.'});

@@ -11,7 +11,8 @@ describe('media runtime/result truth', () => {
   });
   it('reconstructs an active persisted media result after reload without a data URL', () => {
     const display = persistedMedia({ resultId: 'r', runId: 'run', projectId: 'p', nodeId: 'n', kind: 'input-video', blobHash: 'a'.repeat(64), mediaType: 'video/mp4', createdAt: 'now', active: true, parameters: { durationSeconds: 1, container: 'mp4', codecs: 'h264', width: 1280, height: 720, fps: 25, playable: true, fileName: 'clip.mp4' } });
-    expect(display).toMatchObject({ value: 'a'.repeat(64), blobHash: 'a'.repeat(64), fileName: 'clip.mp4', mediaMetadata: { playable: true } });
+    expect(display).toMatchObject({ value: `flowz-media://localhost/${'a'.repeat(64)}`, blobHash: 'a'.repeat(64), fileName: 'clip.mp4', mediaMetadata: { playable: true } });
+    expect(display?.value).not.toMatch(/^tauri:/);
     expect(JSON.stringify(display)).not.toContain('data:');
   });
   it('normalizes database-v6 media results written before playable existed', () => {
