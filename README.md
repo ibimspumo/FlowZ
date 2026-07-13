@@ -43,15 +43,15 @@ Der Artboard-Arbeitsbereich ist ein eigener Design-Canvas und keine vergrößert
 
 #### Projekte auf einen Blick
 
-![FlowZ Home mit echten Projektvorschauen für Flows und Artboards](docs/screenshots/home.png)
+![FlowZ Home mit echten Projektvorschauen für Flows und Artboards](docs/screenshots/home.webp)
 
 #### Inhalte als nachvollziehbarer Flow
 
-![FlowZ Flow-Canvas mit Text-, Referenzbild-, Bildgenerierungs- und Analyse-Node](docs/screenshots/flow.png)
+![FlowZ Flow-Canvas mit Text-, Referenzbild-, Bildgenerierungs- und Analyse-Node](docs/screenshots/flow.webp)
 
 #### Varianten im eigenen Design-Canvas
 
-![FlowZ Artboard-Arbeitsbereich mit einer gestalteten Instagram-Story](docs/screenshots/artboard.png)
+![FlowZ Artboard-Arbeitsbereich mit einer gestalteten Instagram-Story](docs/screenshots/artboard.webp)
 
 ## Was bereits zusammenarbeitet
 
