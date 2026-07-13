@@ -41,10 +41,13 @@ const measured = {
   markdown: await bytes(manifest[lazySources.markdown].file),
   fontPicker: await bytes(manifest[lazySources.fontPicker].file),
 };
-const baseline = { main: 843_258, css: 84_730 };
+// v0.1.1 adds the shared node port rail, artboard-agent feedback states and
+// sticky settings chrome. Keep a narrow amount of headroom over the audited
+// production output so future eager CSS growth still fails loudly.
+const baseline = { main: 843_258, css: 92_450 };
 const budgets = {
   main: 875_000,
-  css: 90_000,
+  css: 95_000,
   fonts: 2_150_000,
   markdown: 170_000,
   fontPicker: 20_000,
