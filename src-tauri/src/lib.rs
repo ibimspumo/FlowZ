@@ -134,6 +134,7 @@ struct ChatRequest {
     output_mode: Option<String>,
     schema_name: Option<String>,
     schema: Option<Value>,
+    system_instruction: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1311,6 +1312,10 @@ fn cancel_transcription_run(
 
 #[tauri::command]
 async fn run_chat(request: ChatRequest) -> Result<AiResult, String> {
+    let custom_system = request.system_instruction.as_deref().unwrap_or("").trim();
+    if custom_system.len() > 8_000 {
+        return Err("Die globale Text-KI-Anweisung ist zu lang.".into());
+    }
     let mut content = vec![json!({"type":"text", "text": request.prompt})];
     for image in request.images {
         let optimized = optimize_reference_image(&image)?;
@@ -1318,11 +1323,18 @@ async fn run_chat(request: ChatRequest) -> Result<AiResult, String> {
     }
     let custom_schema = request.schema.clone();
     let structured = request.output_mode.as_deref() == Some("single") || custom_schema.is_some();
+    let built_in_system = if custom_schema.is_some() {
+        "Return only the requested structured data. Distinguish sourced evidence from assumptions; never invent evidence or availability claims."
+    } else {
+        "Return exactly one final result. Do not add introductions, alternatives, explanations, labels, follow-up questions, or commentary. Put only that single result in the required result field."
+    };
     let messages = if structured {
         json!([
-            {"role":"system", "content": if custom_schema.is_some() { "Return only the requested structured data. Distinguish sourced evidence from assumptions; never invent evidence or availability claims." } else { "Return exactly one final result. Do not add introductions, alternatives, explanations, labels, follow-up questions, or commentary. Put only that single result in the required result field." }},
+            {"role":"system", "content": if custom_system.is_empty() { built_in_system.to_string() } else { format!("{}\n\n{}", custom_system, built_in_system) }},
             {"role":"user", "content": content}
         ])
+    } else if !custom_system.is_empty() {
+        json!([{"role":"system", "content": custom_system}, {"role":"user", "content": content}])
     } else {
         json!([{"role":"user", "content": content}])
     };
@@ -2250,7 +2262,9 @@ fn media_protocol_response(
             | "audio/mpeg"
             | "audio/ogg"
             | "font/ttf"
+            | "image/png"
             | "image/jpeg"
+            | "image/webp"
     ) {
         return fail(StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
@@ -3126,6 +3140,7 @@ pub fn run() {
             artboard_agent::openrouter_artboard_cancel,
             artboard_agent::artboard_agent_session_find,
             artboard_agent::artboard_agent_session_save,
+            artboard_agent::artboard_agent_run_find_latest,
             artboard_agent::artboard_agent_run_save,
             artboard_agent::artboard_agent_usage_save,
             artboard_agent::artboard_agent_proposal_find,
@@ -3990,7 +4005,9 @@ mod tests {
             "audio/flac",
             "audio/mpeg",
             "audio/ogg",
+            "image/png",
             "image/jpeg",
+            "image/webp",
         ]
         .into_iter()
         .enumerate()
@@ -4014,6 +4031,27 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK, "{media_type}");
             assert_eq!(response.headers()[header::CONTENT_TYPE], media_type);
         }
+        let png_source = temp.path().join("cover-cache-key.png");
+        std::fs::write(&png_source, b"bounded-cover").unwrap();
+        let png = persistence
+            .blobs
+            .import(ImportBlobRequest {
+                path: png_source,
+                media_type: Some("image/png".into()),
+                original_name: Some("cover.png".into()),
+            })
+            .unwrap();
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "flowz-media://localhost/{}?cover=revision-fingerprint",
+                png.hash
+            ))
+            .body(Vec::new())
+            .unwrap();
+        let response = media_protocol_response(&request, &persistence);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body(), b"bounded-cover");
         let source = temp.path().join("forbidden");
         std::fs::write(&source, b"forbidden").unwrap();
         let blob = persistence

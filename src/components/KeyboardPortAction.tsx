@@ -53,7 +53,9 @@ export function keyboardPortCandidates({
           nodeLabel,
           portId: port.id,
           portLabel: port.label,
-          connection: { source: originNodeId, sourceHandle: originPortId, target: node.id, targetHandle: port.multiple ? `${port.id}::${occupied}` : port.id },
+          // Multiple cables share the canonical rendered handle. Their stable
+          // order is assigned by the graph store when the connection is saved.
+          connection: { source: originNodeId, sourceHandle: originPortId, target: node.id, targetHandle: port.id },
         });
       }
     } else {

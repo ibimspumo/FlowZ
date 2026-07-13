@@ -58,6 +58,7 @@ jobs:
           corepack pnpm run verify:secrets
           corepack pnpm run verify:icons
           shasum -a 256 -c src-tauri/binaries/SHA256SUMS
+          shasum -a 256 -c src-tauri/third-party/ffmpeg/SHA256SUMS
           test -x src-tauri/binaries/ffmpeg-aarch64-apple-darwin
           test -x src-tauri/binaries/ffprobe-aarch64-apple-darwin
           file src-tauri/binaries/ffmpeg-aarch64-apple-darwin | grep -q 'arm64'
@@ -90,9 +91,6 @@ jobs:
           cp "src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/FlowZ_${{ steps.version.outputs.version }}_aarch64.dmg" release-assets/
           cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/FlowZ.app.tar.gz release-assets/
           cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/FlowZ.app.tar.gz.sig release-assets/
-          curl --fail --location --proto '=https' --tlsv1.2 https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz -o release-assets/ffmpeg-8.1.2.tar.xz
-          echo '464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c  release-assets/ffmpeg-8.1.2.tar.xz' | shasum -a 256 -c -
-          cp src-tauri/third-party/ffmpeg/README.md release-assets/FFMPEG-SOURCE-AND-BUILD.md
           (cd release-assets && shasum -a 256 FlowZ*) > release-assets/SHA256SUMS.build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -129,11 +127,20 @@ jobs:
           fi
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body -q .body > generated-notes.md
           {
+            echo 'Für die Installation wird nur die DMG-Datei benötigt. FFmpeg und FFprobe sind bereits in FlowZ enthalten; es ist kein zusätzlicher Download erforderlich.'
+            echo
             echo 'Unsigned Apple-Silicon build: ad-hoc signed, not Apple-notarized. Follow the README installation notes if Gatekeeper blocks the first launch.'
+            echo
+            echo 'FlowZ bundles unmodified LGPL FFmpeg/FFprobe 8.1.2 binaries together with the verified official corresponding-source archive. License and exact build configuration are included inside the app bundle and in the repository.'
             echo
             cat generated-notes.md
           } > release-notes.md
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md
+          for legacy_asset in ffmpeg-8.1.2.tar.xz FFMPEG-SOURCE-AND-BUILD.md; do
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$legacy_asset"; then
+              gh release delete-asset "$GITHUB_REF_NAME" "$legacy_asset" --repo "$GITHUB_REPOSITORY" --yes
+            fi
+          done
           archive_name=$(basename "$archive")
           archive_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$archive_name"
           jq -n \
@@ -148,10 +155,16 @@ jobs:
           test "$(jq -r '.platforms["darwin-aarch64"].signature' release-assets/latest.json)" = "$(cat "$signature")"
           test -n "$(jq -r .notes release-assets/latest.json)"
           rm release-assets/SHA256SUMS.build
-          (cd release-assets && shasum -a 256 FlowZ* ffmpeg-8.1.2.tar.xz FFMPEG-SOURCE-AND-BUILD.md latest.json) > release-assets/SHA256SUMS.txt
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" release-assets/FlowZ* release-assets/ffmpeg-8.1.2.tar.xz release-assets/FFMPEG-SOURCE-AND-BUILD.md release-assets/latest.json release-assets/SHA256SUMS.txt --clobber
+          (cd release-assets && shasum -a 256 FlowZ* latest.json) > release-assets/SHA256SUMS.txt
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" release-assets/FlowZ* release-assets/latest.json release-assets/SHA256SUMS.txt --clobber
           mkdir published
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir published
+          test "$(find published -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+          test -f "published/FlowZ_${VERSION}_aarch64.dmg"
+          test -f published/FlowZ.app.tar.gz
+          test -f published/FlowZ.app.tar.gz.sig
+          test -f published/latest.json
+          test -f published/SHA256SUMS.txt
           (cd published && shasum -a 256 -c SHA256SUMS.txt)
           test "$(jq -r .version published/latest.json)" = "$VERSION"
           test "$(jq -r '.platforms["darwin-aarch64"].signature' published/latest.json)" = "$(cat "$signature")"

@@ -9,8 +9,10 @@ const transitions: Record<ArtboardAgentRunState, readonly ArtboardAgentRunState[
   interrupted: ["idle"],
   finalizing: ["proposal-ready", "failed", "process-lost", "unknown"],
   "proposal-ready": ["applying", "rejecting", "idle"],
-  applying: ["idle", "failed", "process-lost", "unknown"],
-  rejecting: ["idle", "failed", "process-lost", "unknown"],
+  applying: ["applied", "failed", "process-lost", "unknown"],
+  rejecting: ["rejected", "failed", "process-lost", "unknown"],
+  applied: ["idle", "submitting"],
+  rejected: ["idle", "submitting"],
   failed: ["idle", "recovering"],
   "process-lost": ["recovering", "unknown"],
   recovering: ["streaming", "tool-executing", "finalizing", "proposal-ready", "interrupted", "failed", "unknown"],
@@ -24,7 +26,7 @@ export function transitionAgentRun(run: AgentRunSnapshot, next: ArtboardAgentRun
 }
 
 export function maySubmitAgentTurn(run: AgentRunSnapshot): boolean {
-  return run.state === "idle";
+  return run.state === "idle" || run.state === "applied" || run.state === "rejected";
 }
 
 export function mayExecuteDynamicTool(run: AgentRunSnapshot): boolean {

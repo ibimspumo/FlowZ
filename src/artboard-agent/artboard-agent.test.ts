@@ -4,7 +4,7 @@ import { validateToolInvocation } from "./tool-contract";
 import { selectableArtboardModels, type AgentRunSnapshot } from "./types";
 
 const run = (state: AgentRunSnapshot["state"] = "idle"): AgentRunSnapshot => ({
-  runId: "run-1", workspaceId: "workspace-1", branchId: "branch-main", provider: "codex-local", toolContractVersion: "v1", providerSessionId: "thread-1", modelId: "model-1", inputRevision: 1, selectedBoardRevisionIds: ["revision-1"], state, submittedAt: "2026-07-12T10:00:00.000Z",
+  runId: "run-1", workspaceId: "workspace-1", branchId: "branch-main", conversationId: "chat-1", provider: "codex-local", toolContractVersion: "v1", providerSessionId: "thread-1", modelId: "model-1", inputRevision: 1, selectedBoardRevisionIds: ["revision-1"], state, submittedAt: "2026-07-12T10:00:00.000Z",
 });
 
 describe("provider-neutral artboard agent", () => {
@@ -41,6 +41,11 @@ describe("artboard dynamic tool validation", () => {
   const write = { tool: "update_layers", arguments: { workspaceId: "workspace-1", branchId: "branch-main", proposalId: "proposal-1", operationId: "operation-1", expectedRevision: 4, boardId: "board-1", layers: [layer] } };
   it("accepts a bounded idempotent proposal mutation", () => {
     expect(validateToolInvocation(write, { calls: 0, mutations: 0 }).nextBudget).toEqual({ calls: 1, mutations: 1 });
+  });
+  it("accepts only an exact proposal-only whole-board removal call", () => {
+    const invocation = { tool: "delete_board", arguments: { workspaceId: "workspace-1", branchId: "branch-main", proposalId: "proposal-1", operationId: "operation-delete", expectedRevision: 4, boardId: "board-1" } };
+    expect(validateToolInvocation(invocation, { calls: 0, mutations: 0 }).nextBudget).toEqual({ calls: 1, mutations: 1 });
+    expect(() => validateToolInvocation({ ...invocation, arguments: { ...invocation.arguments, force: true } }, { calls: 0, mutations: 0 })).toThrow(/Unbekannte Werkzeugargumente/);
   });
   it("rejects unknown tools, hidden network/code payloads and oversized layer batches", () => {
     expect(() => validateToolInvocation({ tool: "shell", arguments: {} }, { calls: 0, mutations: 0 })).toThrow(/Unbekanntes/);

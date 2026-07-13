@@ -1,8 +1,9 @@
 import {
-  AlertCircle, Check, ChevronDown, CircleDollarSign, GripHorizontal, LoaderCircle,
-  MessageSquare, RotateCcw, Search, Send, Settings2, Sparkles, Square, X,
+  AlertCircle, ArrowDown, Check, ChevronDown, CircleDollarSign, GripHorizontal, LoaderCircle,
+  MessageSquare, Pencil, Plus, RotateCcw, Search, Send, Settings2, Sparkles, Square, Trash2, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import type { ArtboardAgentModel, ArtboardAgentProvider, ArtboardAgentToolExecutor } from "../artboard-agent";
 import type { FalImageConfig } from "../nodes/image/capabilities";
 import { defaultFalImageConfig,FAL_IMAGE_MODELS,falImageEndpoint,falImageModel,formatImageSizeLabel,validateFalImageConfig } from "../nodes/image/capabilities";
@@ -10,13 +11,16 @@ import { estimateFalImageCost,falImageCostContext } from "../nodes/fal-pricing";
 import { useFalCostDisplay } from "../nodes/use-fal-cost-display";
 import { FalCostEstimateView } from "../nodes/fal-view";
 import { CustomSelect } from "../components/CustomSelect";
+import { DeferredMarkdown } from "../components/DeferredMarkdown";
 import type { ArtboardWorkspace } from "../nodes/brand/artboard-domain";
 import { ArtboardAgentController, isAgentBusy } from "./controller";
 import type {
-  AgentAdapterFactory, ArtboardAgentContext, ArtboardAgentSelection, ProposalResolver, ResolvedArtboardProposal,
+  AgentAdapterFactory, AgentChat, AgentConversationItem, AgentToolActivity, ArtboardAgentContext, ArtboardAgentSelection, ProposalResolver, ResolvedArtboardProposal,
 } from "./types";
+import { ARTBOARD_AGENT_PROVIDER_ORDER } from "./types";
 import { proposalRevisionError } from "./validation";
-import { formatCurrency, formatNumber, localizeErrorMessage, useI18n, type TranslationKey } from "../i18n";
+import { deriveAgentCanvasFeedback, type AgentCanvasFeedback } from "./canvas-feedback";
+import { formatCurrency, formatDate, formatNumber, localizeErrorMessage, useI18n, type TranslationKey } from "../i18n";
 import "./artboard-agent-ui.css";
 
 export type ArtboardDesignAgentProps = {
@@ -35,6 +39,7 @@ export type ArtboardDesignAgentProps = {
   onConfirmFollowUp?: (intent:NonNullable<ResolvedArtboardProposal["followUpIntents"]>[number],proposalId:string,modelId:string,config:FalImageConfig,signal:AbortSignal)=>Promise<ResolvedArtboardProposal>;
   onOpenProviderSettings?: (provider: ArtboardAgentProvider) => void;
   onOpenFalSettings?:()=>void;
+  onCanvasFeedback?: (feedback?: AgentCanvasFeedback) => void;
   initiallyOpen?: boolean;
 };
 
@@ -43,6 +48,7 @@ const toolLabel: Record<string, TranslationKey> = {
   get_workspace_info: "agent.tool.get_workspace_info", get_selection: "agent.tool.get_selection", get_board: "agent.tool.get_board",
   get_layer_tree: "agent.tool.get_layer_tree", get_layers: "agent.tool.get_layers", get_bound_inputs: "agent.tool.get_bound_inputs",
   render_preview: "agent.tool.render_preview", create_layers: "agent.tool.create_layers", update_layers: "agent.tool.update_layers",
+  delete_board: "agent.tool.delete_board",
   delete_layers: "agent.tool.delete_layers", duplicate_layers: "agent.tool.duplicate_layers", reorder_layers: "agent.tool.reorder_layers",
   set_board_properties: "agent.tool.set_board_properties", bind_layer_resource: "agent.tool.bind_layer_resource",
   propose_image_generation: "agent.tool.propose_image_generation", finish_working: "agent.tool.finish_working",
@@ -75,9 +81,21 @@ export function ArtboardDesignAgent(props: ArtboardDesignAgentProps) {
   useEffect(() => controller.updateViewContext({ workspace: props.workspace, branchId: props.branchId, revision: props.revision, selection: props.selection }), [controller, props.workspace, props.branchId, props.revision.id, props.revision.number, props.selection]);
   useEffect(() => { if (state.runState !== "idle") setOpen(true); }, [state.runState]);
 
+  const canvasFeedback = useMemo(
+    () => deriveAgentCanvasFeedback(state, props.workspace, props.selection),
+    [state, props.workspace, props.selection],
+  );
+  useEffect(() => {
+    props.onCanvasFeedback?.(canvasFeedback);
+  }, [canvasFeedback, props.onCanvasFeedback]);
+  useEffect(() => () => props.onCanvasFeedback?.(undefined), [props.onCanvasFeedback]);
+
   const currentProvider = state.providers[state.provider];
   const model = currentProvider.models.find((item) => item.id === state.modelId);
-  const stale = state.proposal ? proposalRevisionError(state.proposal, { workspace: props.workspace, branchId: props.branchId, revision: props.revision, selection: props.selection }) : undefined;
+  const stale = state.proposal
+    ? proposalRevisionError(state.proposal, { workspace: props.workspace, branchId: props.branchId, revision: props.revision, selection: props.selection })
+      ?? (canvasFeedback?.renderError ? t('agent.canvasPreviewFailed',{message:canvasFeedback.renderError}) : undefined)
+    : undefined;
   const busy = isAgentBusy(state) || preparing;
 
   const submit = async () => {
@@ -115,8 +133,17 @@ export function ArtboardDesignAgent(props: ArtboardDesignAgentProps) {
       style={position ? { left: position.x, top: position.y, right: "auto", bottom: "auto" } : undefined}
     >
       <header className="aau-panel-header" onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
-        <GripHorizontal size={15} aria-hidden="true" /><strong>{t('agent.title')}</strong>
-        <span className={`aau-run-state is-${state.runState}`}><i />{t(statusKey(state.runState))}</span>
+        <GripHorizontal size={15} aria-hidden="true" />
+        <AgentChatSelector
+          chats={state.chats}
+          activeChatId={state.activeChatId}
+          disabled={busy}
+          onSelect={(chatId) => void controller.selectChat(chatId)}
+          onCreate={() => void controller.createChat()}
+          onRename={(chatId, title) => void controller.renameChat(chatId, title)}
+          onDelete={(chatId) => void controller.deleteChat(chatId)}
+        />
+        <span className={`aau-run-state is-${canvasFeedback?.renderError ? "failed" : state.runState}`}><i />{canvasFeedback?.renderError ? t('agent.canvasPreviewErrorStatus') : t(statusKey(state.runState))}</span>
         <button type="button" className="aau-icon" onClick={() => setSettings((value) => !value)} aria-label={t('agent.settings')} aria-expanded={settings}><Settings2 size={15} /></button>
         <button type="button" className="aau-icon" onClick={() => setOpen(false)} aria-label={t('agent.collapse')}><X size={15} /></button>
       </header>
@@ -128,22 +155,7 @@ export function ArtboardDesignAgent(props: ArtboardDesignAgentProps) {
         onRetry={(provider) => void controller.probe(provider)} onOpenSettings={props.onOpenProviderSettings}
       /> : null}
 
-      <div className="aau-conversation" aria-live="polite" aria-relevant="additions text">
-        {!state.messages.length ? <div className="aau-empty">
-          <Sparkles size={18} /><strong>{t('agent.emptyTitle')}</strong>
-          <p>{t('agent.emptyBody')}</p>
-        </div> : state.messages.map((item) => <article key={item.id} className={`aau-message is-${item.role} ${item.state === "error" ? "is-error" : ""}`}>
-          <span>{item.role === "user" ? t('agent.you') : item.role === "assistant" ? "Agent" : t('agent.system')}</span>
-          <p>{item.translationKey ? t(item.translationKey) : item.text || <><span className="aau-skeleton" /><span className="aau-skeleton is-short" /></>}</p>
-        </article>)}
-      </div>
-
-      {state.tools.length ? <section className="aau-tools" aria-label={t('agent.tools')}>
-        {state.tools.slice(-5).map((tool) => <div key={tool.id} className={`is-${tool.state}`}>
-          {tool.state === "running" ? <LoaderCircle size={13} className="aau-spin" /> : tool.state === "complete" ? <Check size={13} /> : <AlertCircle size={13} />}
-          <span>{toolLabel[tool.tool] ? t(toolLabel[tool.tool]) : tool.tool}</span><small>{tool.state === "running" ? t('agent.running') : tool.state === "complete" ? t('agent.complete') : t('agent.failed')}</small>
-        </div>)}
-      </section> : null}
+      <AgentConversationViewport messages={state.messages} tools={state.tools} activeChatId={state.activeChatId} runState={state.runState} />
 
       {state.proposal ? <ProposalReview proposal={state.proposal} stale={stale} applying={state.applying} onApply={() => void controller.applyProposal()} onReject={() => controller.rejectProposal()} /> : null}
       {paidProposal ? <ProposalReview proposal={paidProposal} stale={proposalRevisionError(paidProposal,{workspace:props.workspace,branchId:props.branchId,revision:props.revision,selection:props.selection})} applying={state.applying} onApply={()=>void Promise.resolve(props.onApplyProposal(paidProposal.batch,paidProposal)).then(()=>setPaidProposal(undefined))} onReject={()=>setPaidProposal(undefined)} />:null}
@@ -171,6 +183,263 @@ export function ArtboardDesignAgent(props: ArtboardDesignAgentProps) {
   </div>;
 }
 
+export const AGENT_CONVERSATION_NEAR_BOTTOM_PX = 48;
+
+export function conversationDistanceFromBottom(metrics: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">) {
+  return Math.max(0, metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight);
+}
+
+export function isConversationNearBottom(metrics: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">, threshold = AGENT_CONVERSATION_NEAR_BOTTOM_PX) {
+  return conversationDistanceFromBottom(metrics) <= threshold;
+}
+
+export function conversationActivityKey(messages: AgentConversationItem[], tools: AgentToolActivity[]) {
+  const messageKey = messages.map((item) => `${item.id}:${item.text.length}:${item.text.slice(-24)}:${item.state ?? ""}`).join("|");
+  const toolKey = tools.map((item) => `${item.id}:${item.state}`).join("|");
+  return `${messageKey}::${toolKey}`;
+}
+
+export function shouldAutoFollowConversation(input: { wasFollowing: boolean; changedChat: boolean; submitted: boolean; runStarted: boolean }) {
+  return input.wasFollowing || input.changedChat || input.submitted || input.runStarted;
+}
+
+export function ConversationFollowButton({ onClick }: { onClick: () => void }) {
+  const { t } = useI18n();
+  return <button type="button" className="aau-follow-latest" onClick={onClick} aria-label={t("agent.chat.followLatest")}>
+    <i aria-hidden="true" /><ArrowDown size={12} aria-hidden="true" /><span>{t("agent.chat.followLatest")}</span>
+  </button>;
+}
+
+export function AgentConversationViewport({ messages, tools, activeChatId, runState }: { messages: AgentConversationItem[]; tools: AgentToolActivity[]; activeChatId: string; runState: string }) {
+  const { t } = useI18n();
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const followsEndRef = useRef(true);
+  const previousChatIdRef = useRef(activeChatId);
+  const previousUserMessageIdRef = useRef(messages.filter((item) => item.role === "user").at(-1)?.id);
+  const previousRunStateRef = useRef(runState);
+  const [unread, setUnread] = useState(false);
+  const activityKey = conversationActivityKey(messages, tools);
+  const lastUserMessageId = messages.filter((item) => item.role === "user").at(-1)?.id;
+
+  const scrollToEnd = (explicit = false) => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const reduceMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior: explicit && !reduceMotion ? "smooth" : "auto" });
+    followsEndRef.current = true;
+    setUnread(false);
+  };
+
+  useEffect(() => {
+    const changedChat = previousChatIdRef.current !== activeChatId;
+    const submitted = Boolean(lastUserMessageId && previousUserMessageIdRef.current !== lastUserMessageId);
+    const runStarted = previousRunStateRef.current === "idle" && runState === "submitting";
+    if (shouldAutoFollowConversation({ wasFollowing: followsEndRef.current, changedChat, submitted, runStarted })) scrollToEnd(false);
+    else setUnread(true);
+    previousChatIdRef.current = activeChatId;
+    previousUserMessageIdRef.current = lastUserMessageId;
+    previousRunStateRef.current = runState;
+  }, [activeChatId, activityKey, lastUserMessageId, runState]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const content = viewport?.firstElementChild;
+    if (!viewport || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => { if (followsEndRef.current) scrollToEnd(false); });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [activeChatId, activityKey]);
+
+  return <div className="aau-conversation-shell">
+    <div
+      ref={viewportRef}
+      className="aau-conversation"
+      tabIndex={0}
+      aria-label={t("agent.chat.conversation")}
+      aria-live="polite"
+      aria-relevant="additions text"
+      onScroll={(event) => {
+        const nearBottom = isConversationNearBottom(event.currentTarget);
+        followsEndRef.current = nearBottom;
+        if (nearBottom) setUnread(false);
+      }}
+    >
+      {!messages.length && !tools.length ? <div className="aau-empty">
+        <Sparkles size={18} /><strong>{t('agent.emptyTitle')}</strong>
+        <p>{t('agent.emptyBody')}</p>
+      </div> : <AgentTimeline messages={messages} tools={tools} />}
+    </div>
+    {unread ? <ConversationFollowButton onClick={() => { scrollToEnd(true); viewportRef.current?.focus({ preventScroll: true }); }} /> : null}
+  </div>;
+}
+
+type AgentChatSelectorProps = {
+  chats: AgentChat[];
+  activeChatId: string;
+  disabled?: boolean;
+  onSelect: (chatId: string) => void;
+  onCreate: () => void;
+  onRename: (chatId: string, title: string) => void;
+  onDelete: (chatId: string) => void;
+};
+
+export function AgentChatSelector(props: AgentChatSelectorProps) {
+  const { t } = useI18n();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0, width: 260 });
+  const active = props.chats.find((chat) => chat.id === props.activeChatId) ?? props.chats[0];
+
+  const place = () => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(300, Math.max(260, rect.width + 84));
+    setPosition({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+      top: Math.max(8, Math.min(rect.bottom + 5, window.innerHeight - 340)),
+      width,
+    });
+  };
+  const show = () => {
+    place();
+    document.dispatchEvent(new CustomEvent("flowz:close-selects"));
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const first = menuRef.current?.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(props.activeChatId)}"]`) ?? menuRef.current?.querySelector<HTMLElement>("button");
+    first?.focus();
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const closeOnResize = () => setOpen(false);
+    document.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("resize", closeOnResize);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("resize", closeOnResize);
+    };
+  }, [open, props.activeChatId]);
+
+  return <>
+    <button
+      ref={triggerRef}
+      type="button"
+      className="aau-chat-trigger"
+      aria-label={t("agent.chat.choose")}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      disabled={props.disabled}
+      onClick={() => open ? setOpen(false) : show()}
+    >
+      <span>{active?.title || t("agent.chat.untitled")}</span><ChevronDown size={12} aria-hidden="true" />
+    </button>
+    {open ? createPortal(<AgentChatMenu
+      ref={menuRef}
+      {...props}
+      style={position}
+      onClose={() => { setOpen(false); triggerRef.current?.focus(); }}
+      onSelect={(chatId) => { props.onSelect(chatId); setOpen(false); triggerRef.current?.focus(); }}
+    />, document.body) : null}
+  </>;
+}
+
+type AgentChatMenuProps = AgentChatSelectorProps & {
+  onClose: () => void;
+  style?: React.CSSProperties;
+  ref?: React.Ref<HTMLDivElement>;
+};
+
+export function AgentChatMenu({ chats, activeChatId, disabled, onSelect, onCreate, onRename, onDelete, onClose, style, ref }: AgentChatMenuProps) {
+  const { t } = useI18n();
+  const [editingId, setEditingId] = useState<string>();
+  const [draft, setDraft] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
+  const commitRename = (chatId: string) => {
+    const title = draft.trim();
+    if (title) onRename(chatId, title);
+    setEditingId(undefined);
+  };
+  const displayTitle = (chat: AgentChat) => chat.title || t("agent.chat.untitled");
+  const moveFocus = (event: React.KeyboardEvent<HTMLDivElement>, direction: 1 | -1) => {
+    const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled),input:not(:disabled)"));
+    const current = focusable.indexOf(document.activeElement as HTMLElement);
+    focusable[(current + direction + focusable.length) % focusable.length]?.focus();
+  };
+  return <div
+    ref={ref}
+    className="aau-chat-menu"
+    role="dialog"
+    aria-label={t("agent.chat.list")}
+    style={style}
+    onKeyDown={(event) => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+      if (event.key === "ArrowDown") { event.preventDefault(); moveFocus(event, 1); }
+      if (event.key === "ArrowUp") { event.preventDefault(); moveFocus(event, -1); }
+    }}
+  >
+    <header><strong>{t("agent.chat.list")}</strong><span>{t("agent.chat.count", { count: chats.length })}</span></header>
+    <div className="aau-chat-list">
+      {chats.map((chat) => <div className={`aau-chat-row ${chat.id === activeChatId ? "is-active" : ""}`} key={chat.id}>
+        {editingId === chat.id ? <form className="aau-chat-rename" onSubmit={(event) => { event.preventDefault(); commitRename(chat.id); }}>
+          <input
+            autoFocus
+            value={draft}
+            maxLength={80}
+            aria-label={t("agent.chat.renameLabel", { title: displayTitle(chat) })}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+            onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setEditingId(undefined); } }}
+          />
+          <button type="submit" disabled={!draft.trim()} aria-label={t("agent.chat.saveRename")}><Check size={13} /></button>
+          <button type="button" onClick={() => setEditingId(undefined)} aria-label={t("common.cancel")}><X size={13} /></button>
+        </form> : confirmDeleteId === chat.id ? <AgentChatDeleteConfirmation title={displayTitle(chat)} onCancel={() => setConfirmDeleteId(undefined)} onConfirm={() => { onDelete(chat.id); setConfirmDeleteId(undefined); }} /> : <>
+          <button type="button" className="aau-chat-select" data-chat-id={chat.id} aria-current={chat.id === activeChatId ? "true" : undefined} disabled={disabled} onClick={() => onSelect(chat.id)}>
+            <span><strong>{displayTitle(chat)}</strong><small>{formatDate(chat.updatedAt, { dateStyle: "short", timeStyle: "short" })}</small></span>
+            {chat.id === activeChatId ? <Check size={13} aria-hidden="true" /> : null}
+          </button>
+          <button type="button" className="aau-chat-action" disabled={disabled} onClick={() => { setDraft(chat.title); setEditingId(chat.id); }} aria-label={t("agent.chat.renameLabel", { title: displayTitle(chat) })}><Pencil size={12} /></button>
+          <button type="button" className="aau-chat-action is-danger" disabled={disabled || chats.length <= 1} onClick={() => setConfirmDeleteId(chat.id)} aria-label={t("agent.chat.deleteLabel", { title: displayTitle(chat) })}><Trash2 size={12} /></button>
+        </>}
+      </div>)}
+    </div>
+    <button type="button" className="aau-chat-new" disabled={disabled} onClick={() => { onCreate(); onClose(); }}><Plus size={13} />{t("agent.chat.new")}</button>
+  </div>;
+}
+
+export function AgentChatDeleteConfirmation({ title, onCancel, onConfirm }: { title: string; onCancel: () => void; onConfirm: () => void }) {
+  const { t } = useI18n();
+  return <div className="aau-chat-confirm" role="alert">
+    <span>{t("agent.chat.deleteConfirm", { title })}</span>
+    <button type="button" onClick={onCancel}>{t("common.cancel")}</button>
+    <button type="button" className="is-danger" onClick={onConfirm}>{t("common.delete")}</button>
+  </div>;
+}
+
+export function AgentTimeline({ messages, tools }: { messages: AgentConversationItem[]; tools: AgentToolActivity[] }) {
+  const { t } = useI18n();
+  const timeline = [
+    ...messages.map((item) => ({ kind: "message" as const, sequence: item.sequence, item })),
+    ...tools.map((item) => ({ kind: "tool" as const, sequence: item.sequence, item })),
+  ].sort((a, b) => a.sequence - b.sequence);
+  return <div className="aau-timeline">
+    {timeline.map((entry) => entry.kind === "message" ? <article key={`message-${entry.item.id}`} data-timeline-kind="message" data-timeline-id={`message-${entry.item.id}`} className={`aau-message is-${entry.item.role} ${entry.item.state === "error" ? "is-error" : ""}`}>
+      <span>{entry.item.role === "user" ? t('agent.you') : entry.item.role === "assistant" ? "Agent" : t('agent.system')}</span>
+      <div className="aau-message-body">
+        {entry.item.translationKey ? t(entry.item.translationKey) : entry.item.text
+          ? entry.item.role === "assistant" ? <DeferredMarkdown value={entry.item.text} /> : entry.item.text
+          : <><span className="aau-skeleton" /><span className="aau-skeleton is-short" /></>}
+      </div>
+    </article> : <div key={`tool-${entry.item.id}`} data-timeline-kind="tool" data-timeline-id={`tool-${entry.item.id}`} className={`aau-tool-activity is-${entry.item.state}`}>
+      {entry.item.state === "running" ? <LoaderCircle size={13} className="aau-spin" /> : entry.item.state === "complete" ? <Check size={13} /> : <AlertCircle size={13} />}
+      <span>{toolLabel[entry.item.tool] ? t(toolLabel[entry.item.tool]) : entry.item.tool}</span>
+      <small>{entry.item.state === "running" ? t('agent.running') : entry.item.state === "complete" ? t('agent.complete') : t('agent.failed')}</small>
+    </div>)}
+  </div>;
+}
+
 function AgentSettings({ provider, providers, model, modelId, reasoningEffort, query, disabled, onQuery, onProvider, onModel, onEffort, onRetry, onOpenSettings }: {
   provider: ArtboardAgentProvider; providers: ReturnType<ArtboardAgentController["getSnapshot"]>["providers"]; model?: ArtboardAgentModel; modelId: string; reasoningEffort?: string;
   query: string; disabled: boolean; onQuery: (value: string) => void; onProvider: (value: ArtboardAgentProvider) => void; onModel: (value: string) => void; onEffort: (value?: string) => void;
@@ -181,7 +450,7 @@ function AgentSettings({ provider, providers, model, modelId, reasoningEffort, q
   const filtered = useMemo(() => current.models.filter((item) => `${item.name} ${item.id}`.toLocaleLowerCase(locale).includes(query.trim().toLocaleLowerCase(locale))), [current.models, locale, query]);
   return <section className="aau-settings" aria-label={t('agent.configuration')}>
     <div className="aau-provider-tabs" role="radiogroup" aria-label={t('agent.providerGroup')}>
-      {(["openrouter", "codex-local"] as const).map((value) => <button key={value} type="button" role="radio" aria-checked={provider === value} className={provider === value ? "is-active" : ""} disabled={disabled} onClick={() => onProvider(value)}>{value==='codex-local'?t('agent.codexLocal'):providerLabel[value]}<ProviderDot state={providers[value].status.state} /></button>)}
+      {ARTBOARD_AGENT_PROVIDER_ORDER.map((value) => <button key={value} type="button" role="radio" aria-checked={provider === value} className={provider === value ? "is-active" : ""} disabled={disabled} onClick={() => onProvider(value)}>{value==='codex-local'?t('agent.codexLocal'):providerLabel[value]}<ProviderDot state={providers[value].status.state} /></button>)}
     </div>
     {current.status.state === "probing" ? <div className="aau-provider-note"><LoaderCircle size={14} className="aau-spin" />{t('agent.probing')}</div> : null}
     {current.status.state === "ready" ? <>

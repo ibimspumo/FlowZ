@@ -32,6 +32,10 @@ let saveGestureActive = false;
 let changeSequence = 0;
 let openGeneration = 0;
 const activeRuns = new Map<string, { runId: string; fingerprint: string }>();
+export const FLOW_COVER_INVALIDATED_EVENT = 'flowz-document-cover-invalidated';
+function notifyFlowCoverInvalidated(documentId: string) {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(FLOW_COVER_INVALIDATED_EVENT, { detail: { documentId } }));
+}
 // Graph history deliberately excludes generated runtime results. Asset replacement is
 // different: the visible value is part of the structural node definition, so keep the
 // exact before/after display alongside the immutable CommandBus document snapshots.
@@ -152,7 +156,7 @@ function withPassiveDisplays(document: ProjectDocument, runtime: ReadonlyMap<str
   return next;
 }
 
-function sampleGraph(): ProjectDocument['graph'] {
+export function sampleGraph(): ProjectDocument['graph'] {
   const make = (id: string, kind: NodeKind, x: number, y: number, label: string): GraphNode => ({
     id, moduleId: moduleForKind(kind), moduleVersion: 1, position: { x, y }, label,
     config: kind === 'textInput' ? { text: String(registry[kind].defaults.value ?? '') } : { ...registry[kind].defaults } as GraphNode['config'],
@@ -167,6 +171,7 @@ function sampleGraph(): ProjectDocument['graph'] {
     ],
     edges: [
       { id: 'prompt-generate', sourceNodeId: 'prompt', sourcePortId: 'text', targetNodeId: 'generate', targetPortId: 'prompt', order: 0 },
+      { id: 'upload-generate', sourceNodeId: 'upload', sourcePortId: 'image', targetNodeId: 'generate', targetPortId: 'reference', order: 0 },
       { id: 'generate-analyse', sourceNodeId: 'generate', sourcePortId: 'image', targetNodeId: 'analyse', targetPortId: 'image', order: 0 },
     ], groups: [],
   };
@@ -446,6 +451,7 @@ export type FlowState = {
   deleteGroupNodes: (id: string) => void;
   addImageCollection: (sourceNodeId: string, items: HistoryItem[]) => string | undefined;
   addVideoCollection: (sourceNodeId: string, items: HistoryItem[]) => string | undefined;
+  setFanOutResults: (nodeId: string, resultIds: readonly string[]) => boolean;
   bindAssetToNode: (id: string, item: LibraryAssetPayload) => boolean;
   bindDirectMediaToNode: (id: string, binding: DirectMediaBinding) => boolean;
   clearDirectMediaFromNode: (id: string) => boolean;
@@ -780,6 +786,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
         const next = new Map(get().runtimeDisplays); next.set(id, { ...next.get(id), ...runtimePatch });
         set({ runtimeDisplays: next, nodes: get().document ? mergeFlowNodes(get().document!, next, get().nodes) : get().nodes });
       }
+      if (patch.status === 'fresh' && patch.persisted === true) notifyFlowCoverInvalidated(projectId);
       if (propagate || configChanged) markDownstreamStale(id);
       return acceptsFreshResult;
     },
@@ -843,6 +850,24 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const document = get().document;
       if (document) set({ runtimeDisplays, nodes: mergeFlowNodes(document, runtimeDisplays, get().nodes) });
       return id;
+    },
+    setFanOutResults: (nodeId, resultIds) => {
+      const state = get(); const graphNode = state.document?.graph.nodes.find((node) => node.id === nodeId); const display = state.runtimeDisplays.get(nodeId);
+      const kind = graphNode && kindForModule(graphNode.moduleId);
+      if (!graphNode || !display?.history || !kind || !["imageGeneration","videoGeneration","logoDesign"].includes(kind)) return false;
+      const history = new Map(display.history.map((item) => [item.id, item]));
+      const connected = state.document?.graph.edges.filter((edge) => edge.sourceNodeId === nodeId && edge.sourcePortId.startsWith("variant:")).map((edge) => edge.sourcePortId.slice("variant:".length)) ?? [];
+      const selected = [...new Set([...connected, ...resultIds])].filter((id) => {
+        const item = history.get(id); return kind === "videoGeneration" ? item?.mediaType?.startsWith("video/") : item?.mediaType?.startsWith("image/");
+      });
+      if (!selected.length) return false;
+      execute(commands.updateNodeConfig(nodeId, { fanOutResultIds: selected }));
+      const next = new Map(get().runtimeDisplays); const current = next.get(nodeId); const outputValues = { ...(current?.outputValues ?? {}) };
+      for (const key of Object.keys(outputValues)) if (key.startsWith("variant:")) delete outputValues[key];
+      for (const id of selected) { const item = history.get(id); if (item?.blobHash) outputValues[`variant:${id}`] = `flowz-cas:${item.blobHash}`; }
+      next.set(nodeId, { ...current, outputValues });
+      set({ runtimeDisplays: next, nodes: get().document ? mergeFlowNodes(get().document!, next, get().nodes) : get().nodes });
+      return true;
     },
     bindAssetToNode: (id, item) => {
       const state = get();
@@ -930,6 +955,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       next.set(nodeId, { ...next.get(nodeId), status: 'fresh', value, blobHash: selected.blobHash, mediaType: selected.mediaType, assetId: selected.assetId, cost: selected.cost, costProvenance: selected.costProvenance, history, outputValues, persisted: true, error: undefined });
       set({ runtimeDisplays: next, nodes: get().document ? mergeFlowNodes(get().document!, next, get().nodes) : get().nodes });
       markDownstreamStale(nodeId);
+      notifyFlowCoverInvalidated(projectId);
       return true;
     },
     deleteHistoryResult: async (nodeId, resultId) => {

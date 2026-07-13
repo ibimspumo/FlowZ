@@ -102,16 +102,16 @@ export function applyWorkspaceOperations(workspace: Workspace, operations: reado
       board.document.layers = clone(operation.layers); board.document.rootLayerIds = clone(operation.rootLayerIds);
     } else if (operation.type === "delete-layers") {
       const board = next.boards[operation.boardId]; if (!board) continue;
-      const remove=new Set<string>();const visit=(id:string)=>{if(remove.has(id))return;remove.add(id);const layer=board.document.layers[id];if(layer?.type==="group")layer.childIds.forEach(visit);};operation.layerIds.forEach(visit);
+      const remove=new Set<string>();const visit=(id:string)=>{if(remove.has(id))return;remove.add(id);const layer=board.document.layers[id];if(layer?.type==="group"||layer?.type==="container")layer.childIds.forEach(visit);};operation.layerIds.forEach(visit);
       for (const id of remove) delete board.document.layers[id];
       board.document.rootLayerIds = board.document.rootLayerIds.filter((id) => !remove.has(id));
-      for(const layer of Object.values(board.document.layers))if(layer.type==="group")layer.childIds=layer.childIds.filter((id)=>!remove.has(id));
+      for(const layer of Object.values(board.document.layers))if(layer.type==="group"||layer.type==="container")layer.childIds=layer.childIds.filter((id)=>!remove.has(id));
     } else if (operation.type === "reorder-layer") {
       const board = next.boards[operation.boardId]; if (!board) continue;
-      const parent = Object.values(board.document.layers).find((layer) => layer.type === "group" && layer.childIds.includes(operation.layerId));
+      const parent = Object.values(board.document.layers).find((layer) => (layer.type === "group"||layer.type==="container") && layer.childIds.includes(operation.layerId));
       const siblings = board.document.rootLayerIds.includes(operation.layerId)
         ? board.document.rootLayerIds
-        : parent?.type === "group" ? parent.childIds : undefined;
+        : (parent?.type === "group" || parent?.type === "container") ? parent.childIds : undefined;
       if (!siblings) continue;
       const index = siblings.indexOf(operation.layerId); if (index < 0) continue;
       const target = operation.direction === "forward" ? Math.min(siblings.length - 1, index + 1) : Math.max(0, index - 1);
@@ -119,6 +119,18 @@ export function applyWorkspaceOperations(workspace: Workspace, operations: reado
     } else if (operation.type === "create-board") {
       next.boards[operation.board.id] = clone(operation.board); next.placements[operation.board.id] = clone(operation.placement);
       next.activeBoardId = operation.board.id; next.selectedBoardIds = [operation.board.id];
+    } else if (operation.type === "delete-board") {
+      if (!next.boards[operation.boardId]) throw new Error(`Artboard ${operation.boardId} existiert nicht.`);
+      if (Object.keys(next.boards).length <= 1) throw new Error("Das letzte Artboard kann nicht entfernt werden.");
+      delete next.boards[operation.boardId];
+      delete next.placements[operation.boardId];
+      const remaining = Object.keys(next.boards).sort((left, right) => {
+        const a = next.placements[left]; const b = next.placements[right];
+        return (a?.y ?? 0) - (b?.y ?? 0) || (a?.x ?? 0) - (b?.x ?? 0) || left.localeCompare(right);
+      });
+      if (next.activeBoardId === operation.boardId) next.activeBoardId = remaining[0];
+      next.selectedBoardIds = next.selectedBoardIds.filter((id) => id !== operation.boardId);
+      if (!next.selectedBoardIds.length) next.selectedBoardIds = [next.activeBoardId];
     } else if (operation.type === "set-board-inputs") {
       const board = next.boards[operation.boardId]; if (board) {
         board.inputSnapshot = clone(operation.snapshot); board.document.bindings = clone(operation.snapshot.bindings);

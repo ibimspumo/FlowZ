@@ -22,8 +22,8 @@ export function NodeShell({ selected, status, slots }: NodeShellProps) {
   return (
     <article className={`flow-node ${selected ? "is-selected" : ""} status-${status}`} aria-busy={status === "running" || undefined}>
       <>
-          {slots?.ports}
           {slots?.header}
+          {slots?.ports}
           {slots?.body}
           {slots?.footer}
           {slots?.overlays}

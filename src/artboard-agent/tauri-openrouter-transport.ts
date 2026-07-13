@@ -4,7 +4,7 @@ import type { OpenRouterAgentTransport, OpenRouterStreamEvent } from "./openrout
 import type { ARTBOARD_AGENT_TOOL_SPECS } from "./tool-specs";
 
 type Chunk = { id?: string; choices?: { delta?: { content?: string; tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number | string } };
-const SYSTEM = "You are FlowZ's Artboard design agent. Use only the supplied tools. Read bounded state and create proposal operations; never claim they are applied. Finish with finish_working.";
+const SYSTEM = "You are FlowZ's Artboard design agent. Use only the supplied tools. Read bounded state and create proposal operations; never claim they are applied. Use delete_board only when the user explicitly asks to remove that whole Artboard, and never remove the final Artboard. Finish with finish_working.";
 const micros = (value: unknown) => { const number = typeof value === "string" ? Number(value) : value; return typeof number === "number" && Number.isFinite(number) && number >= 0 ? Math.round(number * 1_000_000) : undefined; };
 
 export class TauriOpenRouterAgentTransport implements OpenRouterAgentTransport {

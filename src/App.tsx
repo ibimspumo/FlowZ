@@ -1,6 +1,6 @@
 import { Background, BackgroundVariant, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow, ViewportPortal, type Connection, type FinalConnectionState, type OnConnectStartParams } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { AlertTriangle, Database, Group, History, KeyRound, LayoutTemplate, Library, LoaderCircle, MousePointer2, Pencil, Play, Redo2, RotateCcw, Sparkles, Square, Trash2, Ungroup, Undo2, X } from 'lucide-react';
+import { AlertTriangle, Database, Group, History, LayoutTemplate, Library, LoaderCircle, MousePointer2, Pencil, Play, Redo2, RotateCcw, Sparkles, Square, Trash2, Ungroup, Undo2, X } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { connectionCreatesCycle, flowEdgeToGraph, nextInputOrder, portType } from './app/adapters';
 import { ModuleNodeComponent } from './components/ModuleNodeComponent';
@@ -11,7 +11,7 @@ import { assetCanvasNodePosition, assetNodeConfig, assetNodeKind, assetValue, de
 import { getLibraryAssetContent, getLibraryAssetReference, type LibraryAssetPayload, type LibraryAssetSummary } from './persistence/assets';
 import { assetVersionDirectMediaBinding, directMediaBindingFromConfig, DIRECT_MEDIA_TARGETS } from './nodes/direct-media';
 import { registry, typeColors } from './registry';
-import { currentExecutionFingerprint, displayParameters, persistedTranscriptionTimestamps, useFlowStore } from './store';
+import { currentExecutionFingerprint, displayParameters, FLOW_COVER_INVALIDATED_EVENT, persistedTranscriptionTimestamps, useFlowStore } from './store';
 import type { DataType, FlowEdge, FlowNodeData, NodeKind } from './types';
 import { cancelMediaStage, clearMediaImportCancellation, finalizeMediaStage, isMediaImportCancellationRequested, mediaDisplay, mediaHistoryParameters, stageDroppedMedia } from './persistence/media';
 import { isDesktopRuntime } from './persistence/projects';
@@ -101,7 +101,6 @@ export function Workspace({ projectId, initialViewState, onViewStateChange }: { 
   const store = useFlowStore();
   const { nodes, edges, onNodesChange, onEdgesChange, connect, reconnect, deleteEdge, addNode, reset, document, phase } = store;
   const { screenToFlowPosition } = useReactFlow();
-  const [settings, setSettings] = useState(false);
   const [assetPaletteOpen, setAssetPaletteOpen] = useState(false);
   const [orphanRunsOpen, setOrphanRunsOpen] = useState(false);
   const [dataManagerOpen, setDataManagerOpen] = useState(false);
@@ -367,7 +366,7 @@ export function Workspace({ projectId, initialViewState, onViewStateChange }: { 
       const input = definition.inputs[inputIndex];
       position = { x: menu.flow.x, y: menu.flow.y - PORT_TOP - inputIndex * PORT_GAP };
       const newId = addNode(kind, position);
-      connection = { source: pending.nodeId, sourceHandle: pending.handleId, target: newId, targetHandle: input.multiple ? `${input.id}::0` : input.id };
+      connection = { source: pending.nodeId, sourceHandle: pending.handleId, target: newId, targetHandle: input.id };
     } else if (pending?.handleType === 'target') {
       const outputIndex = definition.outputs.findIndex((output) => output.type === pending.dataType);
       const output = definition.outputs[outputIndex];
@@ -494,7 +493,7 @@ export function Workspace({ projectId, initialViewState, onViewStateChange }: { 
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><div className="brand-mark"><Sparkles size={15} /></div><strong>FlowZ</strong><div className="project-switcher-wrap"><span className="project-switcher" aria-label={`Aktiver Flow: ${document.name}`}><span>{document.name}</span></span></div></div>
-      <div className="top-actions"><div className="history-actions"><button className="icon-button" disabled={!store.canUndo} onClick={store.undo} aria-label={t('canvas.undo')}><Undo2 size={14} /></button><button className="icon-button" disabled={!store.canRedo} onClick={store.redo} aria-label={t('canvas.redo')}><Redo2 size={14} /></button></div><button className={`save-note ${store.saveState}`} onClick={store.saveState === 'conflict' ? () => { if (confirm(t('canvas.reloadConflict'))) void store.reloadAfterConflict(); } : store.saveState === 'error' ? store.retrySave : undefined} disabled={!['conflict','error'].includes(store.saveState)}>{store.saveState === 'saving' && <LoaderCircle className="spin" size={12} />}{['conflict','error'].includes(store.saveState) && <AlertTriangle size={12} />}{saveLabel}</button><button className={`secondary workflow-run-trigger ${workflowRun ? 'is-active' : ''}`} onClick={workflowRun ? cancelWorkflow : () => void runWorkflow(undefined, t('canvas.runStale'))} aria-label={workflowRun ? t('canvas.cancelRun') : t('canvas.runStale')}>{workflowRun ? <Square size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}{workflowRun ? `${workflowRun.completed}/${workflowRun.total} · ${t('common.cancel')}` : t('canvas.runStale')}</button><button ref={assetTriggerRef} className={`secondary ${assetPaletteOpen ? 'is-active' : ''}`} aria-pressed={assetPaletteOpen} onClick={() => assetPaletteOpen ? closeAssetPalette() : setAssetPaletteOpen(true)}><Library size={15} />{t('canvas.assets')}</button><button className={`secondary ${dataManagerOpen ? 'is-active' : ''}`} aria-pressed={dataManagerOpen} onClick={() => setDataManagerOpen((open) => !open)}><Database size={15} />{t('canvas.storage')}</button><button className={`secondary ${orphanRunsOpen ? 'is-active' : ''}`} aria-pressed={orphanRunsOpen} onClick={() => setOrphanRunsOpen((open) => !open)}><History size={15} />{t('canvas.unassigned')}</button><button className="secondary" aria-label={t('settings.title')} onClick={() => setSettings(true)}><KeyRound size={15} />{t('settings.title')}</button></div>
+      <div className="top-actions"><div className="history-actions"><button className="icon-button" disabled={!store.canUndo} onClick={store.undo} aria-label={t('canvas.undo')}><Undo2 size={14} /></button><button className="icon-button" disabled={!store.canRedo} onClick={store.redo} aria-label={t('canvas.redo')}><Redo2 size={14} /></button></div><button className={`save-note ${store.saveState}`} onClick={store.saveState === 'conflict' ? () => { if (confirm(t('canvas.reloadConflict'))) void store.reloadAfterConflict(); } : store.saveState === 'error' ? store.retrySave : undefined} disabled={!['conflict','error'].includes(store.saveState)}>{store.saveState === 'saving' && <LoaderCircle className="spin" size={12} />}{['conflict','error'].includes(store.saveState) && <AlertTriangle size={12} />}{saveLabel}</button><button className={`secondary workflow-run-trigger ${workflowRun ? 'is-active' : ''}`} onClick={workflowRun ? cancelWorkflow : () => void runWorkflow(undefined, t('canvas.runStale'))} aria-label={workflowRun ? t('canvas.cancelRun') : t('canvas.runStale')}>{workflowRun ? <Square size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}{workflowRun ? `${workflowRun.completed}/${workflowRun.total} · ${t('common.cancel')}` : t('canvas.runStale')}</button><button ref={assetTriggerRef} className={`secondary ${assetPaletteOpen ? 'is-active' : ''}`} aria-pressed={assetPaletteOpen} onClick={() => assetPaletteOpen ? closeAssetPalette() : setAssetPaletteOpen(true)}><Library size={15} />{t('canvas.assets')}</button><button className={`secondary ${dataManagerOpen ? 'is-active' : ''}`} aria-pressed={dataManagerOpen} onClick={() => setDataManagerOpen((open) => !open)}><Database size={15} />{t('canvas.storage')}</button><button className={`secondary ${orphanRunsOpen ? 'is-active' : ''}`} aria-pressed={orphanRunsOpen} onClick={() => setOrphanRunsOpen((open) => !open)}><History size={15} />{t('canvas.unassigned')}</button></div>
     </header>
     <main className="canvas-wrap" onContextMenu={(event) => event.preventDefault()}>
       <ReactFlow key={document.id} nodes={dropNodes} edges={edges.map((edge) => ({ ...edge, type: 'default', reconnectable: true, style: { stroke: typeColors[edge.data?.dataType ?? 'text'], strokeWidth: 2 } }))} nodeTypes={nodeTypes} onlyRenderVisibleElements onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={connect} onConnectStart={handleConnectStart} onConnectEnd={handleConnectEnd} onReconnectStart={handleReconnectStart} onReconnect={handleReconnect} onReconnectEnd={handleReconnectEnd} reconnectRadius={12} edgesReconnectable onPaneContextMenu={handlePaneContextMenu} onPaneClick={() => { setMenu(null); store.setProjectMenuOpen(false); }} onDragOver={handleAssetDragOver} onDrop={(event) => void handleAssetDrop(event)} isValidConnection={validConnection} defaultViewport={initialViewState?.viewport ?? document.canvas.viewport} onMoveStart={() => store.beginGesture()} onMoveEnd={(_, viewport) => { store.setViewport(viewport); store.endGesture(); }} onNodeDragStart={() => store.beginGesture()} onNodeDragStop={() => store.endGesture()} fitView={document.graph.nodes.length > 0 && !initialViewState && document.canvas.viewport.zoom === 1 && document.canvas.viewport.x === 0 && document.canvas.viewport.y === 0} fitViewOptions={{ padding: 0.18 }} minZoom={0.2} maxZoom={1.8} colorMode="dark" deleteKeyCode={['Backspace','Delete']}>
@@ -516,7 +515,6 @@ export function Workspace({ projectId, initialViewState, onViewStateChange }: { 
       <div className="asset-drop-status" role="status" aria-live="polite">{assetNotice}</div>
       <div className="workflow-live-status" role="status" aria-live="polite">{workflowRun ? `${workflowRun.label}: ${workflowRun.completed} von ${workflowRun.total}` : ''}</div>
     </main>
-    <Suspense fallback={null}><LazySettings open={settings} onClose={() => setSettings(false)} /></Suspense>
     <ModalDialog open={Boolean(workflowFailure)} className="workflow-failure-dialog" label={t('common.error')} onClose={() => { failureResolverRef.current?.('abort'); failureResolverRef.current = undefined; setWorkflowFailure(undefined); }}>
       <header><AlertTriangle size={18} /><div><strong>{t('canvas.workflowFailed')}</strong><span>{nodes.find((node) => node.id === workflowFailure?.nodeId)?.data.label ?? workflowFailure?.nodeId}</span></div></header>
       <p>{workflowFailure?localizeErrorMessage(workflowFailure.message):''}</p>
@@ -593,7 +591,10 @@ export function FlowZAppShell({ artboardRepository = lazyDesktopArtboardReposito
       coordinator = new DocumentCoverCoordinator({
         list: documentCatalogActions.list,
         openArtboard: artboardRepository.open,
-        onCover: (documentId, cover) => setCatalog((items) => items.map((item) => item.id === documentId && item.contentFingerprint === cover.contentFingerprint ? { ...item, cover } : item)),
+        onCover: (documentId, cover, source) => {
+          const current = catalogRecordToDocument({ ...source, cover });
+          setCatalog((items) => items.map((item) => item.id === documentId ? current : item));
+        },
       });
       coverCoordinatorRef.current = coordinator;
       return documentCatalogActions.list().then((records) => coordinator?.scheduleMissing(records.map(catalogRecordToDocument)));
@@ -683,6 +684,14 @@ export function FlowZAppShell({ artboardRepository = lazyDesktopArtboardReposito
       : current);
   }, [storeDocumentId, storeSaveState]);
   useEffect(() => { if (storeDocumentId && storeSaveState === 'saved') coverCoordinatorRef.current?.schedule(storeDocumentId); }, [storeDocumentId, storeSaveState]);
+  useEffect(() => {
+    const invalidate = (event: Event) => {
+      const documentId = (event as CustomEvent<{ documentId?: string }>).detail?.documentId;
+      if (documentId) coverCoordinatorRef.current?.schedule(documentId);
+    };
+    window.addEventListener(FLOW_COVER_INVALIDATED_EVENT, invalidate);
+    return () => window.removeEventListener(FLOW_COVER_INVALIDATED_EVENT, invalidate);
+  }, []);
 
   const openDocumentTab = useCallback((document: DocumentRecord) => {
     if (document.health.state !== 'healthy') return;
@@ -988,7 +997,7 @@ export function FlowZAppShell({ artboardRepository = lazyDesktopArtboardReposito
   return <div className="flowz-root-shell">
     <DocumentTabs tabs={session.openDocuments} active={session.active} onActivate={(target) => void activateTarget(target)} onCloseRequest={(tab) => void closeTab(tab.documentId)} />
     <div className="flowz-active-surface">
-      {session.active.surface === 'home' || !activeTab ? <Suspense fallback={<div className="home-shell-loading" role="status"><LoaderCircle className="spin" size={18} /></div>}><LazyHomeScreen documents={visibleDocuments} query={query} selectedDocumentId={selectedDocumentId} contextMenu={contextMenu} loading={catalogLoading} errorMessage={catalogError} resolveCoverSrc={(document) => document.cover ? mediaUrl(document.cover.blobHash) : undefined} canCreateKind={() => true} onCreate={(kind) => void createDocument(kind)} onQueryChange={setQuery} onSelect={setSelectedDocumentId} onOpen={(document) => void openDocument(document)} onRenameRequest={(document) => requestDocumentAction('rename', document)} onDuplicateRequest={(document) => requestDocumentAction('duplicate', document)} onDeleteRequest={(document) => requestDocumentAction('delete', document)} onContextMenuRequest={(request) => setContextMenu({ documentId: request.document.id, x: request.x, y: request.y })} onContextMenuClose={() => setContextMenu(undefined)} /></Suspense>
+      {session.active.surface === 'home' || !activeTab ? <Suspense fallback={<div className="home-shell-loading" role="status"><LoaderCircle className="spin" size={18} /></div>}><LazyHomeScreen documents={visibleDocuments} query={query} selectedDocumentId={selectedDocumentId} contextMenu={contextMenu} loading={catalogLoading} errorMessage={catalogError} resolveCoverSrc={(document) => document.cover ? `${mediaUrl(document.cover.blobHash)}?cover=${encodeURIComponent(document.cover.contentFingerprint.slice(0, 16))}` : undefined} canCreateKind={() => true} onCreate={(kind) => void createDocument(kind)} onOpenSettings={() => setShellSettingsOpen(true)} onQueryChange={setQuery} onSelect={setSelectedDocumentId} onOpen={(document) => void openDocument(document)} onRenameRequest={(document) => requestDocumentAction('rename', document)} onDuplicateRequest={(document) => requestDocumentAction('duplicate', document)} onDeleteRequest={(document) => requestDocumentAction('delete', document)} onContextMenuRequest={(request) => setContextMenu({ documentId: request.document.id, x: request.x, y: request.y })} onContextMenuClose={() => setContextMenu(undefined)} /></Suspense>
         : activeTab.kind === 'flow' ? <ReactFlowProvider key={activeTab.documentId}><Workspace projectId={activeTab.documentId} initialViewState={activeTab.viewState.kind === 'flow' ? activeTab.viewState : undefined} onViewStateChange={updateFlowViewState} /></ReactFlowProvider>
           : <Suspense fallback={<div className="home-shell-loading" role="status"><LoaderCircle className="spin" size={18} /></div>}><LazyArtboardDocumentSurface key={activeTab.documentId} documentId={activeTab.documentId} name={activeTab.name} repository={artboardRepository} availableSnapshots={availableArtboardSnapshots} onBack={() => void activateTarget({ surface: 'home' })} onNameChange={(name) => { setCatalog((items) => items.map((item) => item.id === activeTab.documentId ? { ...item, name } : item)); setSession((current) => reduceSession(current, { type: 'rename', documentId: activeTab.documentId, name })); }} onSaveStateChange={(saveState) => setSession((current) => reduceSession(current, { type: 'save-state', documentId: activeTab.documentId, saveState }))} onRegisterFlush={(flush) => { artboardFlushRef.current = flush; }} onRevisionChange={updateLinkedNodeFromRevision} onOpenProviderSettings={() => setShellSettingsOpen(true)} /></Suspense>}
     </div>

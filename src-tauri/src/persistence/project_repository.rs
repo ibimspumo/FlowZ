@@ -650,16 +650,6 @@ impl ProjectRepository {
         ))
     }
 
-    pub(crate) fn cover_source(&self, id: &str) -> Result<(ProjectSaveResult, String), String> {
-        let _references = self
-            .reference_lock
-            .lock()
-            .map_err(|_| "Projekt-Referenzsperre ist beschädigt.".to_string())?;
-        let record = self.open_without_reference_lock(id)?;
-        let (_, fingerprint) = self.catalog_identity_locked(id)?;
-        Ok((record, fingerprint))
-    }
-
     pub fn save(&self, request: SaveProjectRequest) -> Result<ProjectSaveResult, String> {
         let _references = self
             .reference_lock

@@ -2,6 +2,10 @@
 
 FlowZ bundles FFmpeg and FFprobe 8.1.2 for `aarch64-apple-darwin`. They were built
 from the official release source at `https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz`.
+The verified, unmodified archive is included in the app at
+`Contents/Resources/licenses/ffmpeg/source/ffmpeg-8.1.2.tar.xz`, so corresponding
+source remains available with the distributed binaries and requires no separate
+GitHub Release download.
 
 - Source SHA-256: `464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c`
 - `ffmpeg` SHA-256: `7f4fdbe0840a3e6281a4def25ea7977ce0ec233db660bf155b69ccbeb01ff5d5`
@@ -21,7 +25,9 @@ declare `LC_BUILD_VERSION minos 11.0`; the Tauri bundle declares the same minimu
 
 The resulting programs report `LGPL version 2.1 or later` and link no Homebrew
 libraries. Tauri's `externalBin` packaging places them inside the signed app bundle;
-The sidecars are shipped inside the local FlowZ app bundle. This personal-use build is intentionally unsigned and does not require Apple notarization.
+The sidecars and their corresponding source archive are shipped inside the local
+FlowZ app bundle. This personal-use build is intentionally unsigned and does not
+require Apple notarization.
 The corresponding LGPL text and FFmpeg licensing notes are stored beside this file.
 
 Only the Apple-Silicon target is currently present. A release for another target must

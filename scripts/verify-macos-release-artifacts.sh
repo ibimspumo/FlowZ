@@ -10,6 +10,8 @@ app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/FlowZ.app
 dmg="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/FlowZ_${version}_aarch64.dmg"
 archive="$app.tar.gz"
 signature="$archive.sig"
+source_archive="$app/Contents/Resources/licenses/ffmpeg/source/ffmpeg-8.1.2.tar.xz"
+source_sha256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
 
 verify_adhoc_signature() {
   local path=$1 metadata
@@ -41,6 +43,9 @@ test -s "$app/Contents/Resources/icon.icns"
 test -s "$app/Contents/Resources/licenses/ffmpeg/README.md"
 test -s "$app/Contents/Resources/licenses/ffmpeg/LICENSE.md"
 test -s "$app/Contents/Resources/licenses/ffmpeg/COPYING.LGPLv2.1"
+test -s "$source_archive"
+test "$(shasum -a 256 "$source_archive" | awk '{print $1}')" = "$source_sha256"
+test "$(tar -tf "$source_archive" | sed -n '1p')" = "ffmpeg-8.1.2/"
 
 hdiutil verify "$dmg"
 mountpoint=$(mktemp -d)

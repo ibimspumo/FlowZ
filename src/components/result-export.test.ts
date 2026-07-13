@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {resultExportLabel} from './result-export';
+import {resultExportItems,resultExportLabel,resultExportRun} from './result-export';
 import {setLocale} from '../i18n';
 
 describe('result export copy',()=>{
@@ -10,4 +10,14 @@ describe('result export copy',()=>{
     expect(resultExportLabel('transcription')).toBe('Text exportieren');
     setLocale('en');expect(resultExportLabel('videoGeneration')).toBe('Export video');setLocale('de');
   });
+});
+
+it('builds deterministic export payloads for text and persisted media',()=>{
+  const items=[
+    {id:'a',runId:'run-1',createdAt:'2026-01-01',value:'Hello'},
+    {id:'b',runId:'run-1',createdAt:'2026-01-02',value:'flowz://preview',blobHash:'a'.repeat(64)},
+  ];
+  expect(resultExportItems(items)).toEqual([{text:'Hello'},{blobHash:'a'.repeat(64)}]);
+  expect(resultExportRun(items)).toBe('run-1-selection');
+  expect(resultExportRun([items[0]])).toBe('run-1');
 });

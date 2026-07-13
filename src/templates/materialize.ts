@@ -5,6 +5,7 @@ import type { CanvasTemplate } from './types';
 import { assertValidTemplate } from './validation';
 import { localizeTemplateMeta } from '../i18n';
 import { templateById } from './registry';
+import { materializedTemplateEdgeOrders } from './edge-order';
 
 export type MaterializedTemplate = { nodes: GraphNode[]; edges: GraphEdge[]; groups: WorkflowGroup[] };
 
@@ -26,9 +27,10 @@ export function materializeTemplate(template: CanvasTemplate, anchor: { x: numbe
       updatePolicy: node.updatePolicy ?? 'manual',
     };
   });
+  const edgeOrders = materializedTemplateEdgeOrders(template);
   const edges = template.edges.map((edge, index): GraphEdge => ({
     id: `edge-${id()}`, sourceNodeId: ids.get(edge.source)!, sourcePortId: edge.sourcePort,
-    targetNodeId: ids.get(edge.target)!, targetPortId: edge.targetPort, order: edge.order ?? index,
+    targetNodeId: ids.get(edge.target)!, targetPortId: edge.targetPort, order: edgeOrders[index],
   }));
   const groups = template.groups.map((group): WorkflowGroup => ({
     ...group, id: `group-${id()}`, nodeIds: group.nodeIds.map((nodeId) => ids.get(nodeId)!),

@@ -33,4 +33,13 @@ describe('NodeMenu accessibility contract', () => {
     expect(html).toContain('Bild · kompatible Eingänge');
     expect(html).not.toContain('Vorlagen');
   });
+
+  it('shows compact purpose metadata without requiring users to insert a node first',()=>{
+    setLocale('en');
+    const html=renderToStaticMarkup(<NodeMenu state={{screen:{x:0,y:0},flow:{x:0,y:0}}} onSelect={()=>undefined} onSelectTemplate={()=>undefined} onClose={()=>undefined}/>);
+    expect(html).toContain('Text+Image+List → Image+List · Provider');
+    expect(html).toContain('aria-description=');
+    expect(html).toContain('— → Text · Local');
+    setLocale('de');
+  });
 });

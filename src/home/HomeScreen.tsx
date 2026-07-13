@@ -11,6 +11,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Settings,
   Trash2,
   X,
 } from "lucide-react";
@@ -49,6 +50,7 @@ export interface HomeScreenProps {
   resolveCoverSrc?: (document: DocumentRecord) => string | undefined;
   canCreateKind?: (kind: DocumentKind) => boolean;
   onCreate: (kind: DocumentKind) => void;
+  onOpenSettings?: () => void;
   onQueryChange: (query: CatalogQuery) => void;
   onSelect: (documentId: string) => void;
   onOpen: (document: DocumentRecord) => void;
@@ -83,6 +85,15 @@ export function getHomeCardKeyboardAction(key: string, shiftKey = false): HomeCa
   if (key === "F2") return "rename";
   if (key === "Delete" || key === "Backspace") return "delete";
   if (key === "F10" && shiftKey) return "context-menu";
+  return undefined;
+}
+
+export function getHomeCardNavigationIndex(key: string, current: number, count: number): number | undefined {
+  if (count < 1 || current < 0 || current >= count) return undefined;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  if (key === "ArrowLeft" || key === "ArrowUp") return Math.max(0, current - 1);
+  if (key === "ArrowRight" || key === "ArrowDown") return Math.min(count - 1, current + 1);
   return undefined;
 }
 
@@ -279,6 +290,7 @@ export function HomeScreen(props: HomeScreenProps) {
           <div><h1 id="home-title">{t('home.title')}</h1><p>{t('home.subtitle')}</p></div>
         </div>
         <nav className="home-create-actions" aria-label={t('home.create')}>
+          {props.onOpenSettings ? <button type="button" className="home-create-button home-settings-button" onClick={props.onOpenSettings} aria-label={t('settings.title')}><Settings size={15} />{t('settings.title')}</button> : null}
           <button type="button" className="home-create-button home-create-flow" disabled={!canCreate("flow")} title={createUnavailable} aria-describedby={!desktopRuntime ? "home-create-runtime-note" : undefined} onClick={() => props.onCreate("flow")}><Plus size={15} /><GitBranch size={15} />{t('home.newFlow')}</button>
           <button type="button" className="home-create-button home-create-artboard" disabled={!canCreate("artboard")} title={createUnavailable ?? (props.canCreateKind?.("artboard") === false ? t('home.artboardUnavailable') : undefined)} aria-describedby={!desktopRuntime ? "home-create-runtime-note" : undefined} onClick={() => props.onCreate("artboard")}><Plus size={15} /><Frame size={15} />{t('home.newArtboard')}</button>
         </nav>
@@ -306,7 +318,14 @@ export function HomeScreen(props: HomeScreenProps) {
           {props.emptyAction ?? (!props.query.search && props.query.filter === "all" ? <button type="button" className="home-create-button home-create-flow" disabled={!canCreate("flow")} aria-describedby={!desktopRuntime ? "home-create-runtime-note" : undefined} onClick={() => props.onCreate("flow")}><Plus size={15} />{t('home.firstFlow')}</button> : undefined)}
         </section>
       ) : (
-        <section className="home-document-grid" role="listbox" aria-label={t('home.title')} aria-multiselectable="false">
+        <section className="home-document-grid" role="listbox" aria-label={t('home.title')} aria-multiselectable="false" onKeyDown={(event) => {
+          const options = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="option"]')];
+          const current = options.findIndex((option) => option === (event.target as Element).closest('[role="option"]'));
+          const target = getHomeCardNavigationIndex(event.key, current, options.length);
+          if (target === undefined || target === current) return;
+          event.preventDefault(); const next = props.documents[target]; if (!next) return;
+          props.onSelect(next.id); options[target]?.focus();
+        }}>
           {props.documents.map((document, index) => <DocumentCard key={document.id} document={document} selected={props.selectedDocumentId === document.id} tabbable={props.selectedDocumentId === document.id || (!props.selectedDocumentId && index === 0)} locale={props.locale??''} coverSrc={props.resolveCoverSrc?.(document)} onSelect={() => props.onSelect(document.id)} onOpen={() => props.onOpen(document)} onRenameRequest={() => props.onRenameRequest(document)} onDeleteRequest={() => props.onDeleteRequest(document)} onContextMenuRequest={props.onContextMenuRequest} />)}
         </section>
       )}

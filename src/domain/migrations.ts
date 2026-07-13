@@ -201,7 +201,10 @@ export function migrateV1ToV2(project: LegacyProjectV1, migratedAt = '1970-01-01
   const reservedEdgeIds = new Set((project.edges ?? []).flatMap((edge) => edge.id ? [edge.id] : []));
   const allocatedEdgeIds = new Set<string>();
   const edges = (project.edges ?? []).map((edge, index) => {
-    const targetPortId = edge.targetHandle ?? 'input';
+    // Older React Flow snapshots sometimes persisted the visual many-slot
+    // suffix (`prompt::1`). The domain owns a canonical port plus a separate
+    // order, so never carry the renderer-only suffix into the v2 graph.
+    const targetPortId = (edge.targetHandle ?? 'input').split('::')[0];
     const orderKey = `${edge.target}\0${targetPortId}`;
     const order = portOrder.get(orderKey) ?? 0;
     portOrder.set(orderKey, order + 1);
@@ -214,7 +217,7 @@ export function migrateV1ToV2(project: LegacyProjectV1, migratedAt = '1970-01-01
     }
     allocatedEdgeIds.add(id);
     return {
-      id, sourceNodeId: edge.source, sourcePortId: edge.sourceHandle ?? 'output',
+      id, sourceNodeId: edge.source, sourcePortId: (edge.sourceHandle ?? 'output').split('::')[0],
       targetNodeId: edge.target, targetPortId, order,
     };
   });

@@ -205,12 +205,23 @@ function ProviderBody(
       let paidResult:
         | Awaited<ReturnType<typeof storePaidBrandResult>>
         | undefined;
+      const persistedModel = String(result.metadata?.model ?? node.data.model ?? "local");
+      const persistedPrompt = String(result.metadata?.prompt ?? node.data.prompt ?? "");
+      const persistedParameters = {
+        provider: String(result.metadata?.provider ?? (options.paidExecution ? "provider" : "local")),
+        outputMode: String(result.metadata?.outputMode ?? node.data.outputMode ?? "single"),
+        variants: Number(result.metadata?.variants ?? node.data.variantCount ?? 1),
+      };
       if (value && isDesktopRuntime() && !providerPersisted && !options.paidResult)
         stored = await storeLibraryResult({
           projectId,
           nodeId: node.id,
+          model: persistedModel,
           kind: "text",
           text: value,
+          costMicrounits: typeof result.metadata?.costMicrounits === "number" ? Number(result.metadata.costMicrounits) : undefined,
+          prompt: persistedPrompt || undefined,
+          parameters: persistedParameters,
         });
       if (options.paidResult && isDesktopRuntime())
         paidResult = await storePaidBrandResult({
@@ -253,7 +264,9 @@ function ProviderBody(
             createdAt: stored?.createdAt ?? new Date().toISOString(),
             value,
             cost,
-            model: String(node.data.model ?? "local"),
+            model: persistedModel,
+            prompt: persistedPrompt || undefined,
+            parameters: persistedParameters,
             persisted:
               providerPersisted ||
               Boolean(stored) ||

@@ -20,6 +20,7 @@ export type AgentProviderStatus =
 export type AgentSessionKey = {
   workspaceId: string;
   branchId: string;
+  conversationId: string;
   provider: ArtboardAgentProvider;
   toolContractVersion: string;
 };
@@ -29,6 +30,38 @@ export type PersistedAgentSession = AgentSessionKey & {
   modelId: string;
   reasoningEffort?: string;
   lastTurnId?: string;
+  /** One bounded canonical checkpoint, never an operation history. */
+  manualContextCheckpoint?: ArtboardManualContextCheckpoint;
+};
+
+export type ArtboardManualContextCheckpoint = {
+  schemaVersion: 1;
+  revision: { id?: string; number: number };
+  boards: ArtboardManualBoardSnapshot[];
+  truncated?: boolean;
+};
+
+export type ArtboardManualBoardSnapshot = {
+  id: string;
+  name?: string;
+  placement?: { x?: number; y?: number };
+  format?: { preset?: string; width?: number; height?: number };
+  background?: unknown;
+  rootLayerIds: string[];
+  layerCount?: number;
+  bindingCount?: number;
+  layers: ArtboardManualLayerSnapshot[];
+  bindings: unknown[];
+  truncated?: boolean;
+};
+
+export type ArtboardManualLayerSnapshot = {
+  id: string;
+  type?: string;
+  name?: string;
+  parentId?: string;
+  index: number;
+  properties: Record<string, unknown>;
 };
 
 export type ArtboardAgentRunState =
@@ -42,6 +75,8 @@ export type ArtboardAgentRunState =
   | "proposal-ready"
   | "applying"
   | "rejecting"
+  | "applied"
+  | "rejected"
   | "failed"
   | "process-lost"
   | "recovering"
@@ -77,6 +112,8 @@ export interface ArtboardAgentAdapter {
   readonly provider: ArtboardAgentProvider;
   probe(): Promise<AgentProviderStatus>;
   listModels(): Promise<ArtboardAgentModel[]>;
+  latestRun(key: AgentSessionKey): Promise<AgentRunSnapshot | undefined>;
+  saveRun(run: AgentRunSnapshot): Promise<void>;
   openSession(input: AgentSessionKey & { modelId: string; reasoningEffort?: string; previousProviderSessionId?: string }): Promise<PersistedAgentSession>;
   runTurn(input: AgentRunSnapshot, userText: string, onEvent: (event: AgentEvent) => void): Promise<{ providerTurnId: string }>;
   cancel(runId: string): Promise<void>;
@@ -86,6 +123,8 @@ export interface ArtboardAgentAdapter {
 
 export type AgentToolResult = {
   content: unknown;
+  /** Local, bounded visual evidence for Codex dynamic-tool output. Never persisted. */
+  imageDataUrl?: string;
   /** Set by proposal-only write tools. The operation batch is not applied here. */
   proposalId?: string;
 };

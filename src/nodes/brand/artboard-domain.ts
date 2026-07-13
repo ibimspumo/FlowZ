@@ -8,14 +8,26 @@ export const MAX_PASTEBOARD_COORDINATE = 1_000_000;
 export const ARTBOARD_FORMATS = {
   "instagram-post": { label: "Instagram Post", width: 1080, height: 1080 },
   "instagram-story": { label: "Instagram Story", width: 1080, height: 1920 },
-  "youtube-thumbnail": { label: "YouTube Thumbnail", width: 1280, height: 720 },
+  "youtube-thumbnail": { label: "YouTube Thumbnail", width: 1920, height: 1080 },
   "meta-ad": { label: "Meta Ad", width: 1200, height: 628 },
 } as const;
 
 export type ArtboardPreset = keyof typeof ARTBOARD_FORMATS;
 export type ArtboardFormat = { preset: ArtboardPreset; width: number; height: number };
 export type ArtboardGeometry = { x: number; y: number; width: number; height: number; rotation: number };
-export type ArtboardPaint = { kind: "solid"; color: string };
+export type ArtboardPaint =
+  | { kind: "solid"; color: string }
+  | { kind: "linear-gradient"; angle: number; stops: [{ color: string; offset: number }, { color: string; offset: number }] };
+export type ArtboardLayerStyle = {
+  opacity?: number;
+  border?: { width: number; color: string };
+  borderRadius?: number;
+  shadow?: { x: number; y: number; blur: number; color: string; opacity: number };
+};
+export type ArtboardContainerLayout =
+  | { mode: "free"; padding: number }
+  | { mode: "flex"; direction: "row" | "column"; gap: number; padding: number; justify: "start" | "center" | "end" | "space-between"; align: "start" | "center" | "end" | "stretch" }
+  | { mode: "grid"; columns: number; gap: number; padding: number; align: "start" | "center" | "end" | "stretch" };
 export type InputBinding = {
   id: string;
   source: { projectId: string; nodeId: string; portId: string; resultId: string };
@@ -35,8 +47,11 @@ type BaseLayer = {
   visible: boolean;
   version: number;
   geometry: ArtboardGeometry;
+  style?: ArtboardLayerStyle;
 };
 export type GroupLayer = BaseLayer & { type: "group"; childIds: string[] };
+/** A safe, structured DOM-like layout box. Children are positioned relative to its content box. */
+export type ContainerLayer = BaseLayer & { type: "container"; childIds: string[]; layout: ArtboardContainerLayout; fill: ArtboardPaint };
 export type TextLayer = BaseLayer & {
   type: "text";
   text: string;
@@ -63,7 +78,7 @@ export type ShapeLayer = BaseLayer & {
   shape: "rectangle" | "ellipse";
   fill: ArtboardPaint;
 };
-export type ArtboardLayer = GroupLayer | TextLayer | ImageLayer | ShapeLayer;
+export type ArtboardLayer = GroupLayer | ContainerLayer | TextLayer | ImageLayer | ShapeLayer;
 export type ArtboardDocument = {
   schemaVersion: typeof ARTBOARD_DOCUMENT_VERSION;
   id: string;
@@ -156,9 +171,29 @@ function unique(values: readonly string[], label: string) {
 }
 
 function validatePaint(value: unknown, label: string): asserts value is ArtboardPaint {
-  const item = record(value, label); known(item, ["kind", "color"], label);
-  if (item.kind !== "solid") throw new Error(`${label}.kind ist ungültig.`);
-  color(item.color, `${label}.color`);
+  const item = record(value, label);
+  if (item.kind === "solid") { known(item, ["kind", "color"], label); color(item.color, `${label}.color`); return; }
+  if (item.kind !== "linear-gradient") throw new Error(`${label}.kind ist ungültig.`);
+  known(item, ["kind", "angle", "stops"], label); finite(item.angle, `${label}.angle`, -360, 360);
+  if (!Array.isArray(item.stops) || item.stops.length !== 2) throw new Error(`${label}.stops braucht genau zwei Farbstopps.`);
+  item.stops.forEach((value, index) => { const stop = record(value, `${label}.stops.${index}`); known(stop, ["color", "offset"], `${label}.stops.${index}`); color(stop.color, `${label}.stops.${index}.color`); finite(stop.offset, `${label}.stops.${index}.offset`, 0, 1); });
+  if ((item.stops[0] as {offset:number}).offset > (item.stops[1] as {offset:number}).offset) throw new Error(`${label}.stops müssen aufsteigend sortiert sein.`);
+}
+function validateLayerStyle(value: unknown, label: string): asserts value is ArtboardLayerStyle {
+  const item = record(value, label); known(item, ["opacity", "border", "borderRadius", "shadow"], label);
+  if (item.opacity !== undefined) finite(item.opacity, `${label}.opacity`, 0, 1);
+  if (item.borderRadius !== undefined) finite(item.borderRadius, `${label}.borderRadius`, 0, MAX_ARTBOARD_DIMENSION);
+  if (item.border !== undefined) { const border = record(item.border, `${label}.border`); known(border, ["width", "color"], `${label}.border`); finite(border.width, `${label}.border.width`, 0, 256); color(border.color, `${label}.border.color`); }
+  if (item.shadow !== undefined) { const shadow = record(item.shadow, `${label}.shadow`); known(shadow, ["x", "y", "blur", "color", "opacity"], `${label}.shadow`); finite(shadow.x, `${label}.shadow.x`, -2048, 2048); finite(shadow.y, `${label}.shadow.y`, -2048, 2048); finite(shadow.blur, `${label}.shadow.blur`, 0, 512); color(shadow.color, `${label}.shadow.color`); finite(shadow.opacity, `${label}.shadow.opacity`, 0, 1); }
+}
+function validateContainerLayout(value: unknown, label: string): asserts value is ArtboardContainerLayout {
+  const item = record(value, label);
+  if (item.mode === "free") { known(item, ["mode", "padding"], label); finite(item.padding, `${label}.padding`, 0, MAX_ARTBOARD_DIMENSION); return; }
+  if (item.mode === "flex") { known(item, ["mode", "direction", "gap", "padding", "justify", "align"], label); if (item.direction !== "row" && item.direction !== "column") throw new Error(`${label}.direction ist ungültig.`); if (!(["start", "center", "end", "space-between"] as unknown[]).includes(item.justify)) throw new Error(`${label}.justify ist ungültig.`); }
+  else if (item.mode === "grid") { known(item, ["mode", "columns", "gap", "padding", "align"], label); integer(item.columns, `${label}.columns`, 1, 12); }
+  else throw new Error(`${label}.mode ist ungültig.`);
+  finite(item.gap, `${label}.gap`, 0, MAX_ARTBOARD_DIMENSION); finite(item.padding, `${label}.padding`, 0, MAX_ARTBOARD_DIMENSION);
+  if (!(["start", "center", "end", "stretch"] as unknown[]).includes(item.align)) throw new Error(`${label}.align ist ungültig.`);
 }
 function validateGeometry(value: unknown, format: ArtboardFormat, label: string): asserts value is ArtboardGeometry {
   const item = record(value, label); known(item, ["x", "y", "width", "height", "rotation"], label);
@@ -205,21 +240,23 @@ export function validateArtboardDocument(value: unknown): asserts value is Artbo
   const parentCount = new Map<string, number>();
   for (const [layerId, rawLayer] of Object.entries(layers)) {
     id(layerId, `ArtboardDocument.layers.${layerId}`); const layer = record(rawLayer, `ArtboardDocument.layers.${layerId}`);
-    const common = ["id", "type", "name", "locked", "visible", "version", "geometry"];
-    const typeKeys = layer.type === "group" ? ["childIds"] : layer.type === "text" ? ["text", "color", "fontRef", "fontFamily", "fontHash", "fontWeight", "fontStyle", "fontAxes", "fontSize", "align"] : layer.type === "image" ? ["bindingId", "casHash", "assetVersionId", "fit"] : layer.type === "shape" ? ["shape", "fill"] : [];
+    const common = ["id", "type", "name", "locked", "visible", "version", "geometry", "style"];
+    const typeKeys = layer.type === "group" ? ["childIds"] : layer.type === "container" ? ["childIds", "layout", "fill"] : layer.type === "text" ? ["text", "color", "fontRef", "fontFamily", "fontHash", "fontWeight", "fontStyle", "fontAxes", "fontSize", "align"] : layer.type === "image" ? ["bindingId", "casHash", "assetVersionId", "fit"] : layer.type === "shape" ? ["shape", "fill"] : [];
     if (!typeKeys.length) throw new Error(`ArtboardDocument.layers.${layerId}.type ist ungültig.`);
     known(layer, [...common, ...typeKeys], `ArtboardDocument.layers.${layerId}`); id(layer.id, `ArtboardDocument.layers.${layerId}.id`);
     if (layer.id !== layerId) throw new Error(`ArtboardDocument.layers.${layerId}.id stimmt nicht mit dem Schlüssel überein.`);
     safeString(layer.name, `ArtboardDocument.layers.${layerId}.name`, 160);
     if (typeof layer.locked !== "boolean" || typeof layer.visible !== "boolean") throw new Error(`ArtboardDocument.layers.${layerId} hat ungültige Statusfelder.`);
     integer(layer.version, `ArtboardDocument.layers.${layerId}.version`, 1, Number.MAX_SAFE_INTEGER); validateGeometry(layer.geometry, format as unknown as ArtboardFormat, `ArtboardDocument.layers.${layerId}.geometry`);
-    if (layer.type === "group") { stringArray(layer.childIds, `ArtboardDocument.layers.${layerId}.childIds`); unique(layer.childIds, `ArtboardDocument.layers.${layerId}.childIds`); for (const childId of layer.childIds) { id(childId, `ArtboardDocument.layers.${layerId}.childId`); parentCount.set(childId, (parentCount.get(childId) ?? 0) + 1); } }
+    if (layer.style !== undefined) validateLayerStyle(layer.style, `ArtboardDocument.layers.${layerId}.style`);
+    if (layer.type === "group" || layer.type === "container") { stringArray(layer.childIds, `ArtboardDocument.layers.${layerId}.childIds`); unique(layer.childIds, `ArtboardDocument.layers.${layerId}.childIds`); for (const childId of layer.childIds) { id(childId, `ArtboardDocument.layers.${layerId}.childId`); parentCount.set(childId, (parentCount.get(childId) ?? 0) + 1); } }
+    if (layer.type === "container") { validateContainerLayout(layer.layout, `ArtboardDocument.layers.${layerId}.layout`); validatePaint(layer.fill, `ArtboardDocument.layers.${layerId}.fill`); if (layer.layout.padding * 2 >= Math.min(layer.geometry.width, layer.geometry.height)) throw new Error(`ArtboardDocument.layers.${layerId}.layout.padding lässt keinen Inhaltsbereich übrig.`); }
     if (layer.type === "text") {
       safeString(layer.text, `ArtboardDocument.layers.${layerId}.text`, 20_000); color(layer.color, `ArtboardDocument.layers.${layerId}.color`);
       if (layer.fontRef !== undefined) id(layer.fontRef, `ArtboardDocument.layers.${layerId}.fontRef`);
       if (layer.fontFamily !== undefined) safeString(layer.fontFamily, `ArtboardDocument.layers.${layerId}.fontFamily`, 120);
       if (layer.fontHash !== undefined) hash(layer.fontHash, `ArtboardDocument.layers.${layerId}.fontHash`);
-      if ((layer.fontFamily === undefined) !== (layer.fontHash === undefined)) throw new Error(`ArtboardDocument.layers.${layerId} braucht Schriftfamilie und CAS-Hash gemeinsam.`);
+      if (layer.fontHash !== undefined && layer.fontFamily === undefined) throw new Error(`ArtboardDocument.layers.${layerId} braucht für einen CAS-Font eine Schriftfamilie.`);
       if (layer.fontWeight !== undefined) integer(layer.fontWeight, `ArtboardDocument.layers.${layerId}.fontWeight`, 1, 1_000);
       if (layer.fontStyle !== undefined && layer.fontStyle !== "normal" && layer.fontStyle !== "italic") throw new Error(`ArtboardDocument.layers.${layerId}.fontStyle ist ungültig.`);
       if (layer.fontAxes !== undefined) { const axes=record(layer.fontAxes,`ArtboardDocument.layers.${layerId}.fontAxes`); if(Object.keys(axes).length>16)throw new Error(`ArtboardDocument.layers.${layerId}.fontAxes enthält zu viele Achsen.`); for(const [tag,axisValue] of Object.entries(axes)){if(!/^[A-Za-z0-9]{4}$/.test(tag))throw new Error(`ArtboardDocument.layers.${layerId}.fontAxes.${tag} ist ungültig.`);finite(axisValue,`ArtboardDocument.layers.${layerId}.fontAxes.${tag}`,-100_000,100_000);} }
@@ -231,7 +268,7 @@ export function validateArtboardDocument(value: unknown): asserts value is Artbo
   for (const rootId of document.rootLayerIds) if (!(rootId in layers)) throw new Error(`Unbekannte Root-Ebene ${rootId}.`);
   for (const [childId, count] of parentCount) { if (!(childId in layers)) throw new Error(`Unbekannte Kind-Ebene ${childId}.`); if (count > 1) throw new Error(`Ebene ${childId} besitzt mehrere Eltern.`); if (document.rootLayerIds.includes(childId)) throw new Error(`Artboard enthält einen Ebenenzyklus: ${childId} ist zugleich Root und Kind.`); }
   const visited = new Set<string>(); const stack = new Set<string>();
-  const walk = (layerId: string, depth: number) => { if (depth > MAX_ARTBOARD_DEPTH) throw new Error(`Artboard überschreitet die maximale Ebenentiefe ${MAX_ARTBOARD_DEPTH}.`); if (stack.has(layerId)) throw new Error("Artboard enthält einen Ebenenzyklus."); if (visited.has(layerId)) return; stack.add(layerId); const layer = layers[layerId] as unknown as ArtboardLayer; if (layer.type === "group") for (const childId of layer.childIds) walk(childId, depth + 1); stack.delete(layerId); visited.add(layerId); };
+  const walk = (layerId: string, depth: number) => { if (depth > MAX_ARTBOARD_DEPTH) throw new Error(`Artboard überschreitet die maximale Ebenentiefe ${MAX_ARTBOARD_DEPTH}.`); if (stack.has(layerId)) throw new Error("Artboard enthält einen Ebenenzyklus."); if (visited.has(layerId)) return; stack.add(layerId); const layer = layers[layerId] as unknown as ArtboardLayer; if (layer.type === "group" || layer.type === "container") for (const childId of layer.childIds) walk(childId, depth + 1); stack.delete(layerId); visited.add(layerId); };
   for (const rootId of document.rootLayerIds) walk(rootId, 1);
   if (visited.size !== Object.keys(layers).length) throw new Error("Artboard enthält nicht erreichbare oder zyklische Ebenen.");
 }

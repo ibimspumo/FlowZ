@@ -134,6 +134,9 @@ async function chat(
       costMicrounits: cost,
       variants: outputs.length,
       provider: "openrouter",
+      model: String(node.config.model),
+      prompt,
+      outputMode: String(node.config.outputMode),
       results: providerResults,
     },
   };

@@ -29,6 +29,11 @@ import { MediaPreview } from "../components/MediaPreview";
 import { DeferredMarkdown } from "../components/DeferredMarkdown";
 import { DirectImageSource } from "../components/DirectImageSource";
 import { NodeHistoryLauncher } from "../components/NodeHistoryLauncher";
+import { NodeCostSummary } from "../components/NodeCostSummary";
+import { NodePolicyControl } from "../components/NodePolicyControl";
+import { VariantOutputSockets, variantOutputItems } from "../components/VariantOutputSockets";
+import { ListProcessingControl } from "../components/ListProcessingControl";
+import { nodePortRailRowCount, nodePortRailStyle, nodePortSocketStyle } from "../components/node-port-layout";
 import {
   mediaUrl,
   cancelMediaImport,
@@ -114,13 +119,19 @@ function Ports({ node }: { node: RuntimeProps }) {
       || edges.some((edge) => edge.source === node.id && edge.sourceHandle?.split("::")[0] === port.id)
       || node.data.kind === "imageCollection" || node.data.kind === "videoCollection";
   });
+  const variants = variantOutputItems(node.data);
+  const rowCount = nodePortRailRowCount(
+    definition.inputs.length,
+    outputs.length,
+    variants.map((item) => item.index),
+  );
   return (
-    <>
+    <div className="node-port-space" style={nodePortRailStyle(rowCount)}>
       {definition.inputs.map((port, index) => (
         <div
           key={`i:${port.id}`}
           className="socket socket-in"
-          style={{ top: 54 + index * 26 }}
+          style={nodePortSocketStyle(index)}
         >
           <Handle
             type="target"
@@ -136,7 +147,7 @@ function Ports({ node }: { node: RuntimeProps }) {
         <div
           key={`o:${port.id}`}
           className="socket socket-out"
-          style={{ top: 54 + index * 26 }}
+          style={nodePortSocketStyle(index)}
         >
           <span>{localizedPortLabel(port.id, port.type, port.label)}</span>
           <KeyboardPortAction nodeId={node.id} nodeKind={node.data.kind} portId={port.id} portLabel={port.label} dataType={port.type} direction="output" />
@@ -148,7 +159,8 @@ function Ports({ node }: { node: RuntimeProps }) {
           />
         </div>
       ))}
-    </>
+      <VariantOutputSockets nodeId={node.id} kind={node.data.kind} data={node.data} offset={outputs.length} colors={socketColors} />
+    </div>
   );
 }
 
@@ -188,7 +200,7 @@ export function ModuleNodeFrame({
         ports: <Ports node={node} />,
         header: (
           <header className="node-header">
-            <div>
+            <div className="node-heading">
               <strong>
                 {localizedCanonicalNodeLabel(
                   node.data.labelId,
@@ -203,6 +215,7 @@ export function ModuleNodeFrame({
                 )}
               </span>
             </div>
+            <NodePolicyControl nodeId={node.id} kind={node.data.kind} value={node.data.updatePolicy} />
             <button
               type="button"
               className="icon-button"
@@ -218,6 +231,7 @@ export function ModuleNodeFrame({
             className="node-content nodrag nowheel nopan"
             onWheel={(event) => event.stopPropagation()}
           >
+            <ListProcessingControl nodeId={node.id} data={node.data} />
             {children}
             <NodeHistoryLauncher nodeId={node.id} data={node.data}/>
             {node.data.error ? (
@@ -237,6 +251,7 @@ export function ModuleNodeFrame({
               />
               {t(statusKey)}
             </span>
+            <NodeCostSummary data={node.data} />
           </footer>
         ),
       }}

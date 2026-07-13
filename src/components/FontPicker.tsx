@@ -112,9 +112,10 @@ export function FontPicker({
     [preparing, setPreparing] = useState(false),
     [error, setError] = useState(""),
     [cacheRevision, refresh] = useState(0);
+  const catalogValue = useMemo(() => GOOGLE_FONTS.some((font) => font.family === value), [value]);
   const selected = useMemo(
-    () => findFont(value, variantIndex, axes),
-    [value, variantIndex, axes],
+    () => findFont(catalogValue ? value : GOOGLE_FONTS[0].family, catalogValue ? variantIndex : undefined, catalogValue ? axes : undefined),
+    [catalogValue, value, variantIndex, axes],
   );
   useEffect(()=>{if(preview==="Deine Marke, klar erzählt."||preview==="Your brand, told clearly.")setPreview(t("font.defaultPreview"));},[locale]);
   const recentFamilies = recent();
@@ -334,10 +335,10 @@ export function FontPicker({
         }}
       >
         <span>
-          <strong>{selected.family}</strong>
+          <strong>{value}</strong>
           <small>
-            {selected.style} · {selected.weight}
-            {selected.variants[selected.variantIndex]?.variable
+            {catalogValue ? `${selected.style} · ${selected.weight}` : t("font.system")}
+            {catalogValue && selected.variants[selected.variantIndex]?.variable
               ? ` · ${t("font.variable")}`
               : ""}
           </small>

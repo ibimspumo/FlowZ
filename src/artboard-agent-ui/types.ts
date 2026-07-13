@@ -11,6 +11,8 @@ import type { ArtboardOperationBatch } from "../artboard-workspace/types";
 import type { ArtboardWorkspace } from "../nodes/brand/artboard-domain";
 import type { ProposalDiffItem, ResolvedArtboardProposal } from "../artboard-agent/proposals";
 import type { TranslationKey } from "../i18n";
+
+export const ARTBOARD_AGENT_PROVIDER_ORDER = ["codex-local", "openrouter"] as const;
 export type { ProposalDiffItem, ResolvedArtboardProposal } from "../artboard-agent/proposals";
 
 export type AgentAdapterFactory = {
@@ -34,8 +36,12 @@ export type ProposalResolver = (proposalId: string) => Promise<ResolvedArtboardP
 
 export type AgentToolActivity = {
   id: string;
+  /** Run ownership is required for transient canvas feedback. Older persisted
+   * activities intentionally omit it and can never affect a newer run. */
+  runId?: string;
   tool: string;
   state: "running" | "complete" | "failed";
+  sequence: number;
 };
 
 export type AgentConversationItem = {
@@ -45,6 +51,19 @@ export type AgentConversationItem = {
   translationKey?: TranslationKey;
   state?: "streaming" | "complete" | "error";
   createdAt: string;
+  sequence: number;
+};
+
+export type AgentChat = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PersistedAgentChat = AgentChat & {
+  messages: AgentConversationItem[];
+  tools: AgentToolActivity[];
 };
 
 export type ArtboardAgentUsage = {
@@ -68,6 +87,8 @@ export type ArtboardAgentControllerState = {
   prompt: string;
   messages: AgentConversationItem[];
   tools: AgentToolActivity[];
+  chats: AgentChat[];
+  activeChatId: string;
   run?: AgentRunSnapshot;
   runState: ArtboardAgentRunState;
   proposal?: ResolvedArtboardProposal;

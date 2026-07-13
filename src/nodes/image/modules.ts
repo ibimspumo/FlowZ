@@ -67,6 +67,7 @@ const imageGenerationSchema = exactConfig({
   acceleration: { validate: field.string(32), optional: true },
   safetyChecker: { validate: field.boolean(), optional: true },
   streamingEnabled: { validate: field.boolean(), optional: true },
+  fanOutResultIds: { validate: field.strings(100), optional: true },
   listProcessingMode: {
     validate: field.enum(["map", "aggregate"]),
     optional: true,

@@ -50,6 +50,7 @@ const schema = exactConfig({
   imageEndpointConfigs: { validate: jsonObject },
   streamingEnabled: { validate: field.boolean(), optional: true },
   directMedia: { validate: directMediaConfigField, optional: true },
+  fanOutResultIds: { validate: field.strings(100), optional: true },
   ...optionalExportSchema,
 });
 

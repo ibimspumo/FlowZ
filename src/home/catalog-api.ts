@@ -12,6 +12,7 @@ export type DocumentCatalogRecord = {
   lastOpenedAt?: string;
   revision?: number;
   fingerprint?: string;
+  coverFingerprint?: string;
   health: DocumentHealth;
   cover?: { blobHash: string; contentFingerprint: string; width: number; height: number; mediaType: "image/png" | "image/svg+xml"; generatedAt: string };
 };

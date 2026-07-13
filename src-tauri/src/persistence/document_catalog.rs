@@ -8,8 +8,10 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
+
+type FlowCoverResultState = BTreeMap<String, (String, Option<String>, Option<String>)>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -35,6 +37,8 @@ pub struct CatalogRecord {
     pub revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_fingerprint: Option<String>,
     pub health: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cover: Option<DocumentCoverRecord>,
@@ -68,11 +72,17 @@ pub struct DocumentCoverCommitRequest {
 #[serde(rename_all = "camelCase")]
 pub struct FlowCoverNode {
     id: String,
+    label: String,
+    module_id: String,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
     color: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_blob_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -353,11 +363,40 @@ fn module_cover_color(module_id: &str) -> &'static str {
     }
 }
 
+fn cover_text(value: Option<&Value>) -> Option<String> {
+    let raw = value?.as_str()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(raw.chars().take(240).collect())
+}
+
+fn module_cover_label(module_id: &str) -> String {
+    module_id
+        .rsplit('.')
+        .next()
+        .unwrap_or(module_id)
+        .replace(['-', '_'], " ")
+}
+
 fn document_kind_key(kind: DocumentKind) -> &'static str {
     match kind {
         DocumentKind::Flow => "flow",
         DocumentKind::Artboard => "artboard",
     }
+}
+
+fn cover_fingerprint_for_state(
+    kind: DocumentKind,
+    document_fingerprint: &str,
+    active_results: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    fingerprint(&json!({
+        "renderer": "flowz-home-cover-v2",
+        "kind": document_kind_key(kind),
+        "documentFingerprint": document_fingerprint,
+        "activeResults": active_results,
+    }))
 }
 
 fn stable_catalog_id(operation_id: &str, action: &str, kind: DocumentKind, role: &str) -> String {
@@ -376,6 +415,44 @@ fn stable_catalog_id(operation_id: &str, action: &str, kind: DocumentKind, role:
 }
 
 impl Persistence {
+    fn flow_cover_state_locked(&self, project_id: &str) -> Result<FlowCoverResultState, String> {
+        self.database.with_catalog_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT a.node_id,r.id,r.blob_hash,r.text_value
+                 FROM active_results a JOIN results r ON r.id=a.result_id
+                 WHERE a.project_id=?1 ORDER BY a.node_id,r.id",
+            )?;
+            let rows = statement.query_map([project_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    (
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ),
+                ))
+            })?;
+            rows.collect::<Result<BTreeMap<_, _>, _>>()
+        })
+    }
+
+    fn cover_fingerprint_locked(
+        &self,
+        id: &str,
+        kind: DocumentKind,
+        document_fingerprint: &str,
+    ) -> Result<String, String> {
+        let active_results = if kind == DocumentKind::Flow {
+            self.flow_cover_state_locked(id)?
+                .into_iter()
+                .map(|(node_id, (result_id, _, _))| (node_id, result_id))
+                .collect::<BTreeMap<_, _>>()
+        } else {
+            BTreeMap::new()
+        };
+        cover_fingerprint_for_state(kind, document_fingerprint, &active_results)
+    }
+
     fn reserve_catalog_operation_locked(
         &self,
         operation_id: &str,
@@ -429,7 +506,7 @@ impl Persistence {
                     let workspace_raw: String = row.get(4)?;
                     let workspace: Value = serde_json::from_str(&workspace_raw).map_err(|error| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, error.into()))?;
                     let hash = fingerprint(&workspace).map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
-                    Ok(CatalogRecord { id: id.into(), kind: DocumentKind::Artboard, name: Some(row.get(0)?), created_at: Some(row.get(1)?), updated_at: Some(row.get(2)?), last_opened_at: None, revision: Some(row.get::<_, i64>(3)? as u64), fingerprint: Some(hash), health: "healthy".into(), cover: None })
+                    Ok(CatalogRecord { id: id.into(), kind: DocumentKind::Artboard, name: Some(row.get(0)?), created_at: Some(row.get(1)?), updated_at: Some(row.get(2)?), last_opened_at: None, revision: Some(row.get::<_, i64>(3)? as u64), fingerprint: Some(hash), cover_fingerprint: None, health: "healthy".into(), cover: None })
                 },
             ).optional()
         })
@@ -497,7 +574,15 @@ impl Persistence {
         if !valid_fingerprint(content_fingerprint) {
             return Err("Cover-Fingerprint ist ungültig.".into());
         }
-        let (record, current_fingerprint) = self.projects.cover_source(id)?;
+        let _guard = self
+            .reference_lock
+            .lock()
+            .map_err(|_| "Dokument-Referenzsperre ist beschädigt.".to_string())?;
+        let record = self.projects.catalog_open_locked(id)?;
+        let (_, document_fingerprint) = self.projects.catalog_identity_locked(id)?;
+        let active_results = self.flow_cover_state_locked(id)?;
+        let current_fingerprint =
+            self.cover_fingerprint_locked(id, DocumentKind::Flow, &document_fingerprint)?;
         if record.revision != expected_revision || current_fingerprint != content_fingerprint {
             return Err("COVER_SOURCE_STALE".into());
         }
@@ -506,13 +591,34 @@ impl Persistence {
             .graph
             .nodes
             .iter()
-            .map(|node| FlowCoverNode {
-                id: node.id.clone(),
-                x: node.position.x,
-                y: node.position.y,
-                width: 310.0,
-                height: 220.0,
-                color: module_cover_color(&node.module_id).into(),
+            .map(|node| {
+                let active = active_results.get(&node.id).cloned();
+                let config_blob = node
+                    .config
+                    .get("blobHash")
+                    .and_then(Value::as_str)
+                    .filter(|value| value.len() == 64)
+                    .map(str::to_owned);
+                let preview_text = active.as_ref().and_then(|item| item.2.clone()).or_else(|| {
+                    ["text", "value", "prompt", "instruction", "question", "url"]
+                        .into_iter()
+                        .find_map(|key| cover_text(node.config.get(key)))
+                });
+                FlowCoverNode {
+                    id: node.id.clone(),
+                    label: node
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| module_cover_label(&node.module_id)),
+                    module_id: node.module_id.clone(),
+                    x: node.position.x,
+                    y: node.position.y,
+                    width: 310.0,
+                    height: 220.0,
+                    color: module_cover_color(&node.module_id).into(),
+                    preview_blob_hash: active.and_then(|item| item.1).or(config_blob),
+                    preview_text,
+                }
             })
             .collect::<Vec<_>>();
         let positions = record
@@ -604,9 +710,14 @@ impl Persistence {
         match request.kind {
             DocumentKind::Flow => {
                 let current = self.projects.catalog_open_locked(&request.document_id)?;
-                let (revision, current_fingerprint) = self
+                let (revision, document_fingerprint) = self
                     .projects
                     .catalog_identity_locked(&request.document_id)?;
+                let current_fingerprint = self.cover_fingerprint_locked(
+                    &request.document_id,
+                    request.kind,
+                    &document_fingerprint,
+                )?;
                 if current.revision != revision
                     || revision != request.expected_revision
                     || current_fingerprint != request.content_fingerprint
@@ -627,8 +738,13 @@ impl Persistence {
                 };
                 let workspace: Value = serde_json::from_str(&raw)
                     .map_err(|_| "Artboard ist beschädigt.".to_string())?;
+                let current_fingerprint = self.cover_fingerprint_locked(
+                    &request.document_id,
+                    request.kind,
+                    &fingerprint(&workspace)?,
+                )?;
                 if revision as u64 != request.expected_revision
-                    || fingerprint(&workspace)? != request.content_fingerprint
+                    || current_fingerprint != request.content_fingerprint
                 {
                     return Err("COVER_COMMIT_STALE".into());
                 }
@@ -642,15 +758,17 @@ impl Persistence {
         match (request.kind, request.media_type.as_str()) {
             (DocumentKind::Flow, "image/svg+xml")
                 if safe_cover_svg(&request.bytes, request.width, request.height) => {}
-            (DocumentKind::Artboard, "image/png") if request.bytes.len() <= 2 * 1024 * 1024 => {
+            (DocumentKind::Flow | DocumentKind::Artboard, "image/png")
+                if request.bytes.len() <= 2 * 1024 * 1024 =>
+            {
                 let decoded = image::load_from_memory(&request.bytes)
-                    .map_err(|_| "Artboard-Cover ist kein dekodierbares PNG.".to_string())?;
+                    .map_err(|_| "Dokument-Cover ist kein dekodierbares PNG.".to_string())?;
                 if !request.bytes.starts_with(b"\x89PNG\r\n\x1a\n")
                     || decoded.width() != request.width
                     || decoded.height() != request.height
                 {
                     return Err(
-                        "Artboard-Cover und deklarierte Abmessungen stimmen nicht überein.".into(),
+                        "Dokument-Cover und deklarierte Abmessungen stimmen nicht überein.".into(),
                     );
                 }
             }
@@ -682,7 +800,13 @@ impl Persistence {
                 ).optional()?;
                 let Some((revision, raw)) = current else { return Err(rusqlite::Error::QueryReturnedNoRows) };
                 let workspace: Value = serde_json::from_str(&raw).map_err(|error| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, error.into()))?;
-                let current_fingerprint = fingerprint(&workspace).map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
+                let document_fingerprint = fingerprint(&workspace).map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
+                let current_fingerprint = fingerprint(&json!({
+                    "renderer": "flowz-home-cover-v2",
+                    "kind": "artboard",
+                    "documentFingerprint": document_fingerprint,
+                    "activeResults": BTreeMap::<String, String>::new(),
+                })).map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
                 if revision as u64 != request.expected_revision || current_fingerprint != request.content_fingerprint {
                     return Err(rusqlite::Error::InvalidParameterName("COVER_COMMIT_STALE".into()));
                 }
@@ -724,6 +848,7 @@ impl Persistence {
                 last_opened_at: None,
                 revision: summary.revision,
                 fingerprint: summary.fingerprint,
+                cover_fingerprint: None,
                 health: match summary.diagnosis {
                     ProjectDiagnosis::Healthy => "healthy",
                     ProjectDiagnosis::Recovered => "recovered",
@@ -759,6 +884,7 @@ impl Persistence {
                         last_opened_at: None,
                         revision: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
                         fingerprint: healthy_hash.then_some(hash).flatten(),
+                        cover_fingerprint: None,
                         health: if healthy_hash { "healthy" } else { "corrupt" }.into(),
                         cover: None,
                     })
@@ -767,18 +893,37 @@ impl Persistence {
             Ok(records)
         })?;
         records.append(&mut artboards);
+        let active_flow_results = self.database.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT a.project_id,a.node_id,a.result_id FROM active_results a ORDER BY a.project_id,a.node_id,a.result_id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })?;
+            let mut by_project = BTreeMap::<String, BTreeMap<String, String>>::new();
+            for row in rows {
+                let (project_id, node_id, result_id) = row?;
+                by_project.entry(project_id).or_default().insert(node_id, result_id);
+            }
+            Ok(by_project)
+        })?;
         for record in &mut records {
             if record.health != "healthy" {
                 continue;
             }
-            if let (Some(revision), Some(content_fingerprint)) =
+            if let (Some(revision), Some(document_fingerprint)) =
                 (record.revision, record.fingerprint.as_deref())
             {
+                let empty = BTreeMap::new();
+                let active_results = active_flow_results.get(&record.id).unwrap_or(&empty);
+                let content_fingerprint =
+                    cover_fingerprint_for_state(record.kind, document_fingerprint, active_results)?;
+                record.cover_fingerprint = Some(content_fingerprint.clone());
                 record.cover = self.document_cover_locked(
                     &record.id,
                     record.kind,
                     revision,
-                    content_fingerprint,
+                    &content_fingerprint,
                 )?;
             }
         }
@@ -887,6 +1032,7 @@ impl Persistence {
             last_opened_at: None,
             revision: Some(revision.revision_number as u64),
             fingerprint: Some(fingerprint(&workspace)?),
+            cover_fingerprint: None,
             health: "healthy".into(),
             cover: None,
         })
@@ -969,6 +1115,7 @@ impl Persistence {
                     last_opened_at: None,
                     revision: Some(result.revision_number as u64),
                     fingerprint: Some(fingerprint(&workspace)?),
+                    cover_fingerprint: None,
                     health: "healthy".into(),
                     cover: None,
                 })
@@ -1094,6 +1241,7 @@ impl Persistence {
             last_opened_at: None,
             revision: Some(revision.revision_number as u64),
             fingerprint: Some(fingerprint(&workspace)?),
+            cover_fingerprint: None,
             health: "healthy".into(),
             cover: None,
         })
@@ -1311,6 +1459,7 @@ fn flow_record(
             .catalog_identity_locked(&record.project.id)
             .ok()
             .map(|(_, hash)| hash),
+        cover_fingerprint: None,
         health: "healthy".into(),
         cover: None,
     }
@@ -1589,7 +1738,14 @@ mod tests {
             })
             .unwrap();
         let revision = created.revision.unwrap();
-        let fingerprint = created.fingerprint.clone().unwrap();
+        let fingerprint = persistence
+            .document_catalog_list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == created.id)
+            .unwrap()
+            .cover_fingerprint
+            .unwrap();
         let source = persistence
             .document_flow_cover_source(&created.id, revision, &fingerprint)
             .unwrap();
@@ -1640,12 +1796,20 @@ mod tests {
             .unwrap_err();
         assert_eq!(stale_error, "COVER_COMMIT_STALE");
 
+        let current_fingerprint = persistence
+            .document_catalog_list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == created.id)
+            .unwrap()
+            .cover_fingerprint
+            .unwrap();
         let current_invalid_error = persistence
             .document_cover_commit(DocumentCoverCommitRequest {
                 document_id: created.id.clone(),
                 kind: DocumentKind::Flow,
                 expected_revision: renamed.revision.unwrap(),
-                content_fingerprint: renamed.fingerprint.unwrap(),
+                content_fingerprint: current_fingerprint,
                 width: 480,
                 height: 300,
                 media_type: "image/svg+xml".into(),
@@ -1667,6 +1831,59 @@ mod tests {
     }
 
     #[test]
+    fn flow_cover_fingerprint_tracks_the_active_history_result_without_a_project_revision() {
+        let (_temp, persistence) = persistence();
+        let created = persistence
+            .document_catalog_create(CatalogCreateRequest {
+                kind: DocumentKind::Flow,
+                name: "History Cover".into(),
+                operation_id: Some("history-cover-create".into()),
+            })
+            .unwrap();
+        let before = persistence
+            .document_catalog_list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == created.id)
+            .unwrap();
+        let before_cover = before.cover_fingerprint.unwrap();
+        persistence.database.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO runs(id,project_id,node_id,provider,model,status,started_at,finished_at) VALUES('cover-run',?1,'image-node','local','test','success','now','now')",
+                [&created.id],
+            )?;
+            connection.execute(
+                "INSERT INTO results(id,run_id,kind,text_value,created_at) VALUES('cover-result','cover-run','text','Neue Auswahl','now')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO active_results(project_id,node_id,result_id) VALUES(?1,'image-node','cover-result')",
+                [&created.id],
+            )?;
+            Ok(())
+        }).unwrap();
+        let after = persistence
+            .document_catalog_list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == created.id)
+            .unwrap();
+        let after_cover = after.cover_fingerprint.unwrap();
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.fingerprint, before.fingerprint);
+        assert_ne!(after_cover, before_cover);
+        assert_eq!(
+            persistence
+                .document_flow_cover_source(&created.id, created.revision.unwrap(), &before_cover)
+                .unwrap_err(),
+            "COVER_SOURCE_STALE"
+        );
+        assert!(persistence
+            .document_flow_cover_source(&created.id, created.revision.unwrap(), &after_cover)
+            .is_ok());
+    }
+
+    #[test]
     fn cover_replacement_and_document_delete_release_only_unreferenced_cas() {
         let (_temp, persistence) = persistence();
         let created = persistence
@@ -1676,10 +1893,18 @@ mod tests {
                 operation_id: Some("cover-gc-create".into()),
             })
             .unwrap();
+        let cover_fingerprint = persistence
+            .document_catalog_list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == created.id)
+            .unwrap()
+            .cover_fingerprint
+            .unwrap();
         let request = |fill: &str| {
             DocumentCoverCommitRequest {
             document_id: created.id.clone(), kind: DocumentKind::Flow,
-            expected_revision: created.revision.unwrap(), content_fingerprint: created.fingerprint.clone().unwrap(),
+            expected_revision: created.revision.unwrap(), content_fingerprint: cover_fingerprint.clone(),
             width: 480, height: 300, media_type: "image/svg+xml".into(),
             bytes: format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="480" height="300" viewBox="0 0 480 300"><rect width="480" height="300" fill="{fill}"/></svg>"#).into_bytes(),
         }

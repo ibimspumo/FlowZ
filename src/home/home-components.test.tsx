@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentTabs, getAdjacentTabTarget } from "./DocumentTabs";
-import { getHomeCardKeyboardAction, HomeScreen, isDocumentOpenable } from "./HomeScreen";
+import { getHomeCardKeyboardAction, getHomeCardNavigationIndex, HomeScreen, isDocumentOpenable } from "./HomeScreen";
 import { emptyViewState, type DocumentRecord, type DocumentTab } from "./types";
 import { setLocale } from "../i18n";
 
@@ -32,6 +32,14 @@ const callbacks = {
 };
 
 describe("HomeScreen", () => {
+  it("provides roving keyboard navigation across every project card", () => {
+    expect(getHomeCardNavigationIndex("ArrowRight", 0, 3)).toBe(1);
+    expect(getHomeCardNavigationIndex("ArrowUp", 2, 3)).toBe(1);
+    expect(getHomeCardNavigationIndex("Home", 2, 3)).toBe(0);
+    expect(getHomeCardNavigationIndex("End", 0, 3)).toBe(2);
+    expect(getHomeCardNavigationIndex("Enter", 0, 3)).toBeUndefined();
+  });
+
   it("renders both document kinds as explicit text and icons without mounting an editor", () => {
     const html = renderToStaticMarkup(<HomeScreen {...callbacks} documents={[documentRecord("flow", "flow"), documentRecord("board", "artboard")]} query={{ search: "", filter: "all", sort: "updated" }} selectedDocumentId="flow" />);
     expect(html).toContain("Neuer Flow");

@@ -26,7 +26,7 @@ describe("artboard document repository boundary", () => {
   it("creates a non-overlapping standalone board with the requested format", () => {
     const next = addBlankBoard(workspace(), "youtube-thumbnail", "board-1");
     expect(Object.keys(next.boards)).toHaveLength(2);
-    expect(next.boards[next.activeBoardId].document.format).toMatchObject({ preset: "youtube-thumbnail", width: 1280, height: 720 });
+    expect(next.boards[next.activeBoardId].document.format).toMatchObject({ preset: "youtube-thumbnail", width: 1920, height: 1080 });
     expect(() => validateArtboardWorkspace(next)).not.toThrow();
   });
 
@@ -39,5 +39,18 @@ describe("artboard document repository boundary", () => {
     expect(next.boards["board-1"].inputSnapshot.id).toBe("snapshot-2");
     expect(next.boards["board-1"].document.tokenRefs).toEqual({ palette:{artifactId:"palette-result",snapshotHash:"a".repeat(64)},fonts:{artifactId:"fonts-result",snapshotHash:"b".repeat(64)} });
     expect(() => validateArtboardWorkspace(next)).not.toThrow();
+  });
+
+  it("removes a whole board deterministically while preserving a valid active selection", () => {
+    const source = addBlankBoard(workspace(), "instagram-story", "board-1");
+    const removedId = source.activeBoardId;
+    const next = applyWorkspaceOperations(source, [{ type: "delete-board", boardId: removedId }]);
+    expect(next.boards[removedId]).toBeUndefined();
+    expect(next.placements[removedId]).toBeUndefined();
+    expect(next.activeBoardId).toBe("board-1");
+    expect(next.selectedBoardIds).toEqual(["board-1"]);
+    expect(source.boards[removedId]).toBeDefined();
+    expect(() => validateArtboardWorkspace(next)).not.toThrow();
+    expect(() => applyWorkspaceOperations(workspace(), [{ type: "delete-board", boardId: "board-1" }])).toThrow(/letzte Artboard/);
   });
 });

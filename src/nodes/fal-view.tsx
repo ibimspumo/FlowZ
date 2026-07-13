@@ -19,6 +19,11 @@ import { createFalExecutionServices } from "./fal-transport";
 import { nodeSpecifications } from "./module-specifications";
 import { NodeShell } from "../components/NodeShell";
 import { NodeHistoryLauncher } from "../components/NodeHistoryLauncher";
+import { NodeCostSummary } from "../components/NodeCostSummary";
+import { NodePolicyControl } from "../components/NodePolicyControl";
+import { VariantOutputSockets, variantOutputItems } from "../components/VariantOutputSockets";
+import { ListProcessingControl } from "../components/ListProcessingControl";
+import { nodePortRailRowCount, nodePortRailStyle, nodePortSocketStyle } from "../components/node-port-layout";
 import { mediaUrl } from "../persistence/media";
 import { currentExecutionFingerprint, useFlowStore } from "../store";
 import type { FlowNode, FlowNodeData, HistoryItem, NodeKind } from "../types";
@@ -79,6 +84,18 @@ export function FalFrame({
     edges = useFlowStore((s) => s.edges),
     { t } = useI18n(),
     definition = nodeSpecifications[node.data.kind];
+  const visibleOutputs = definition.outputs.filter((port) => {
+    if (!port.type.endsWith("List")) return true;
+    const materialized = node.data.outputValues?.[port.id];
+    return (Array.isArray(materialized) && materialized.length > 1)
+      || edges.some((edge) => edge.source === node.id && edge.sourceHandle?.split("::")[0] === port.id);
+  });
+  const variants = variantOutputItems(node.data);
+  const portRowCount = nodePortRailRowCount(
+    definition.inputs.length,
+    visibleOutputs.length,
+    variants.map((item) => item.index),
+  );
   const Status =
     node.data.status === "running"
       ? LoaderCircle
@@ -91,12 +108,12 @@ export function FalFrame({
       status={node.data.status}
       slots={{
         ports: (
-          <>
+          <div className="node-port-space" style={nodePortRailStyle(portRowCount)}>
             {definition.inputs.map((port, index) => (
               <div
                 key={`i${port.id}`}
                 className="socket socket-in"
-                style={{ top: 54 + index * 26 }}
+                style={nodePortSocketStyle(index)}
               >
                 <Handle
                   type="target"
@@ -110,16 +127,11 @@ export function FalFrame({
                 </span>
               </div>
             ))}
-            {definition.outputs.filter((port) => {
-              if (!port.type.endsWith("List")) return true;
-              const materialized = node.data.outputValues?.[port.id];
-              return (Array.isArray(materialized) && materialized.length > 1)
-                || edges.some((edge) => edge.source === node.id && edge.sourceHandle?.split("::")[0] === port.id);
-            }).map((port, index) => (
+            {visibleOutputs.map((port, index) => (
               <div
                 key={`o${port.id}`}
                 className="socket socket-out"
-                style={{ top: 54 + index * 26 }}
+                style={nodePortSocketStyle(index)}
               >
                 <span>
                   {localizedPortLabel(port.id, port.type, port.label)}
@@ -133,11 +145,12 @@ export function FalFrame({
                 />
               </div>
             ))}
-          </>
+            <VariantOutputSockets nodeId={node.id} kind={node.data.kind} data={node.data} offset={visibleOutputs.length} colors={colors} />
+          </div>
         ),
         header: (
           <header className="node-header">
-            <div>
+            <div className="node-heading">
               <strong>
                 {localizedCanonicalNodeLabel(
                   node.data.labelId,
@@ -152,6 +165,7 @@ export function FalFrame({
                 )}
               </span>
             </div>
+            <NodePolicyControl nodeId={node.id} kind={node.data.kind} value={node.data.updatePolicy} />
             <button
               className="icon-button"
               onClick={() => remove(node.id)}
@@ -166,6 +180,7 @@ export function FalFrame({
             className="node-content nodrag nowheel nopan"
             onWheel={(event) => event.stopPropagation()}
           >
+            <ListProcessingControl nodeId={node.id} data={node.data} />
             {children}
             <NodeHistoryLauncher nodeId={node.id} data={node.data}/>
             {node.data.error ? (
@@ -189,6 +204,7 @@ export function FalFrame({
                   ? t("node.status.running")
                   : t("node.status.ready")}
             </span>
+            <NodeCostSummary data={node.data} />
           </footer>
         ),
       }}

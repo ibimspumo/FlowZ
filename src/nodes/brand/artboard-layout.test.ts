@@ -1,0 +1,16 @@
+import { describe, expect, it } from "vitest";
+import { validateToolInvocation } from "../../artboard-agent/tool-contract";
+import { ARTBOARD_FORMATS, validateArtboardDocument, type ArtboardDocument } from "./artboard-domain";
+import { createArtboardRenderPlan, renderArtboardSvg } from "./artboard-renderer";
+
+const layoutDocument=():ArtboardDocument=>({schemaVersion:1,id:"document-layout",name:"Layout",format:{preset:"instagram-post",width:ARTBOARD_FORMATS["instagram-post"].width,height:ARTBOARD_FORMATS["instagram-post"].height},paint:{kind:"linear-gradient",angle:90,stops:[{color:"#101010",offset:0},{color:"#202020",offset:1}]},rootLayerIds:["layout-1"],layers:{
+  "layout-1":{id:"layout-1",type:"container",name:"Cards",locked:false,visible:true,version:1,geometry:{x:100,y:100,width:880,height:360,rotation:0},childIds:["card-a","card-b"],layout:{mode:"grid",columns:2,gap:20,padding:30,align:"stretch"},fill:{kind:"linear-gradient",angle:135,stops:[{color:"#EE3399",offset:0},{color:"#5533EE",offset:1}]},style:{opacity:.9,border:{width:2,color:"#FFFFFF"},borderRadius:24,shadow:{x:0,y:16,blur:32,color:"#000000",opacity:.4}}},
+  "card-a":{id:"card-a",type:"shape",name:"A",locked:false,visible:true,version:1,geometry:{x:0,y:0,width:200,height:120,rotation:0},shape:"rectangle",fill:{kind:"solid",color:"#111111"},style:{borderRadius:12}},
+  "card-b":{id:"card-b",type:"shape",name:"B",locked:false,visible:true,version:1,geometry:{x:0,y:0,width:200,height:120,rotation:0},shape:"rectangle",fill:{kind:"solid",color:"#222222"},style:{borderRadius:12}},
+},bindings:{},tokenRefs:{}});
+
+describe("structured Artboard DOM/CSS model",()=>{
+  it("validates and deterministically lays out safe Grid containers",()=>{const document=layoutDocument();expect(()=>validateArtboardDocument(document)).not.toThrow();const first=createArtboardRenderPlan(document),second=createArtboardRenderPlan(structuredClone(document));expect(second).toEqual(first);expect(first.layers.map((layer)=>[layer.id,layer.geometry.x,layer.geometry.width])).toEqual([["layout-1",100,880],["card-a",130,400],["card-b",550,400]]);});
+  it("renders gradients, radius, border and shadow in the canonical SVG without scripts or external CSS",()=>{const svg=renderArtboardSvg(layoutDocument(),()=>"");expect(svg).toContain("<linearGradient");expect(svg).toContain("<feDropShadow");expect(svg).toContain('rx="24"');expect(svg).toContain('stroke="#FFFFFF"');expect(svg).not.toMatch(/<script|@import|javascript:|<foreignObject/i);});
+  it("accepts only the bounded v2 container tool shape and rejects executable or open-ended content",()=>{const layer=structuredClone(layoutDocument().layers["layout-1"]);delete (layer as {version?:number}).version;const invocation={tool:"create_layers",arguments:{workspaceId:"workspace-1",branchId:"branch-main",proposalId:"proposal-1",operationId:"operation-1",expectedRevision:1,boardId:"board-1",layers:[layer]}};expect(()=>validateToolInvocation(invocation,{calls:0,mutations:0})).not.toThrow();expect(()=>validateToolInvocation({...invocation,arguments:{...invocation.arguments,layers:[{...layer,html:"<script>alert(1)</script>"}]}},{calls:0,mutations:0})).toThrow(/Unbekannte|Code|Werkzeug/);});
+});

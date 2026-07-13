@@ -28,6 +28,15 @@ function accepts(definition: NodeDefinition, pending?: PendingConnection) {
     : definition.outputs.some((output) => output.type === pending.dataType);
 }
 
+const PROVIDER_NODES = new Set<NodeKind>(['textGeneration','imageGeneration','imageUpscale','backgroundRemoval','videoGeneration','imageAnalysis','transcription','research','audienceAnalysis','brandNames','fontPairing','colorPalette','logoDesign']);
+const typeShort = (type: DataType, english: boolean) => type === 'image' ? (english?'Image':'Bild') : type === 'video' ? 'Video' : type === 'audio' ? 'Audio' : type === 'json' ? (english?'Artifact':'Artefakt') : type.endsWith('List') || type === 'list' ? (english?'List':'Liste') : 'Text';
+export function nodeMenuMeta(definition: NodeDefinition, english = false) {
+  const inputs=[...new Set(definition.inputs.map((port)=>typeShort(port.type,english)))];
+  const outputs=[...new Set(definition.outputs.map((port)=>typeShort(port.type,english)))];
+  const io=`${inputs.length ? inputs.join('+') : '—'} → ${outputs.length ? outputs.join('+') : '—'}`;
+  return `${io} · ${PROVIDER_NODES.has(definition.kind) ? (english ? 'Provider' : 'Provider') : (english ? 'Local' : 'Lokal')}`;
+}
+
 export function NodeMenu({ state, onSelect, onSelectTemplate, onClose }: {
   state: NodeMenuState;
   onSelect: (kind: NodeKind) => void;
@@ -81,9 +90,10 @@ export function NodeMenu({ state, onSelect, onSelectTemplate, onClose }: {
         const items = definitions.filter((definition) => definition.category === category);
         if (!items.length) return null;
         return <section key={category}><h2>{localizedCategory(category)}</h2>{items.map((definition) => {
-          return <button key={definition.kind} className="node-menu-item" onClick={() => onSelect(definition.kind)}>
+          const description=localizedNodeDescription(definition.kind,definition.description);
+          return <button key={definition.kind} className="node-menu-item" onClick={() => onSelect(definition.kind)} title={`${description}\n${nodeMenuMeta(definition,locale==='en')}`} aria-description={`${description}. ${nodeMenuMeta(definition,locale==='en')}`}>
             <span className={`type-dot ${definition.outputs[0]?.type ?? definition.inputs[0]?.type ?? 'text'}`} />
-            <span>{localizedNodeLabel(definition.kind,definition.label)}</span>
+            <span className="node-menu-item-copy"><b>{localizedNodeLabel(definition.kind,definition.label)}</b><small>{nodeMenuMeta(definition,locale==='en')}</small></span>
           </button>;
         })}</section>;
       })}

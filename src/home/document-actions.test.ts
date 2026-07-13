@@ -11,6 +11,16 @@ describe("document catalog action state", () => {
     expect(catalogRecordToDocument({ id: "bad", kind: "artboard", health: "corrupt" }).health).toEqual({ state: "corrupt", reason: "Das Artboard-Dokument ist beschädigt." });
   });
 
+  it("uses the versioned cover fingerprint and discards legacy SVG covers", () => {
+    const coverFingerprint = "b".repeat(64);
+    const legacy = catalogRecordToDocument({
+      id: "legacy", kind: "flow", revision: 3, fingerprint: "a".repeat(64), coverFingerprint, health: "healthy",
+      cover: { blobHash: "c".repeat(64), contentFingerprint: coverFingerprint, width: 480, height: 300, mediaType: "image/svg+xml", generatedAt: "2026-07-12T10:00:00Z" },
+    });
+    expect(legacy.contentFingerprint).toBe(coverFingerprint);
+    expect(legacy.cover).toBeUndefined();
+  });
+
   it("renames catalog and open tab together and removes a deleted active tab", () => {
     let session = reduceSession(emptySession(), { type: "open", document: flow, at: flow.updatedAt });
     const renamed = { ...flow, name: "Neu", revision: 4 };

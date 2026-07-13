@@ -23,27 +23,19 @@ Checkout never persists Git credentials. Every reusable Action is pinned to a fu
 - The final app, main binary and both sidecars pass strict ad-hoc codesign verification.
 - Main binary and sidecars are ARM64 with macOS 11.0 as their minimum target; the app plist declares the same floor.
 - The icon-generation manifest cryptographically binds the 1024 px master to the generated PNG/ICNS/ICO/Web outputs; the final app contains that generated icon.
-- Bundled FFmpeg license/build notices are present in the app. The release also publishes the exact official FFmpeg 8.1.2 source tarball, verifies its pinned SHA-256 and includes the build configuration beside it.
+- Bundled FFmpeg license/build notices, the exact build configuration and the verified official FFmpeg 8.1.2 corresponding-source archive are present in the app. FFmpeg, FFprobe and their source archive are never presented as separate installation downloads.
 - The DMG passes `hdiutil verify` and mounts read-only without Finder auto-open. Its app tree must byte-match the already verified bundle; the mounted app, main binary and sidecars repeat the ad-hoc/no-Team-ID, ARM64 and macOS 11.0 checks.
 - The generated updater signature verifies against the exact public key embedded in `tauri.conf.json`; a deliberately corrupted archive must fail the same verifier.
 - `latest.json` is checked for version, `darwin-aarch64`, exact archive URL and exact signature contents.
 - Published assets are downloaded again and checked against `SHA256SUMS.txt` before the draft becomes the latest public release.
 
-## Deferred P0: initial repository publication
+## Repository publication evidence
 
-The workspace currently has no tracked initial commit containing the application and workflows. A GitHub-hosted clean-checkout run therefore cannot prove the pipeline until the overall product implementation is complete and the user intentionally creates and pushes the initial commit. This is deliberately deferred; it must not be silently treated as complete.
-
-Immediately after that intentional push, run:
-
-```bash
-bash scripts/verify-clean-checkout.sh main
-```
-
-Then open a pull request and require the pinned `CI` workflow to pass from GitHub's own clean checkout. Only after both checks pass may the first version tag be pushed. The first tag run must remain draft until artifact redownload, checksum, updater JSON and signature validation have passed.
+The repository was published from a clean, locally verified checkout. GitHub CI then passed on the exact tagged commit, and the v0.1.0 workflow kept its release draft until artifact redownload, checksums, updater JSON and signature validation had passed. Every later stable tag must repeat those same commit-bound gates.
 
 Before the first release, replace the icon master if required and run `corepack pnpm icons`. CI requires the exact 1024 px master, a matching generation manifest, the generated ICNS/ICO/PNG assets and byte-identical web icon; it never generates or substitutes artwork during a release.
 
-## First tag runbook
+## Stable release runbook
 
 The updater signature is free Minisign-based Tauri infrastructure. It does not require an Apple Developer account, Developer ID certificate or notarization subscription. Before pushing the first tag:
 
@@ -56,7 +48,7 @@ The updater signature is free Minisign-based Tauri infrastructure. It does not r
 
 For authenticated setup, `gh secret set --env release-signing TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/flowz-updater.key` reads the key without placing it in shell history. Pipe the Keychain value directly into the corresponding `gh secret set --env` command; never echo it or pass it as a command-line argument.
 
-`scripts/verify-macos-release-artifacts.sh` is shared by the local rehearsal and GitHub Actions. This prevents the architecture, ad-hoc signature, DMG, embedded-license and Minisign checks from drifting between the two paths.
+`scripts/verify-macos-release-artifacts.sh` is shared by the local rehearsal and GitHub Actions. This prevents the architecture, ad-hoc signature, DMG, embedded-license, corresponding-source hash and Minisign checks from drifting between the two paths.
 
 ## Key recovery
 

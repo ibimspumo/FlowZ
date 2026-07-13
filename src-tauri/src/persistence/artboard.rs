@@ -231,6 +231,103 @@ fn finite_number(value: Option<&Value>, label: &str, min: f64, max: f64) -> Resu
     }
     Ok(number)
 }
+fn valid_color(value: &str) -> bool {
+    value.len() == 7
+        && value.starts_with('#')
+        && value[1..]
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('A'..='F').contains(&c))
+}
+fn validate_paint(value: &Value, label: &str) -> Result<(), String> {
+    let paint = object(value, label)?;
+    match paint.get("kind").and_then(Value::as_str) {
+        Some("solid") => {
+            known(paint, &["kind", "color"], label)?;
+            if !valid_color(paint.get("color").and_then(Value::as_str).unwrap_or("")) {
+                return Err(format!("{label}.color ist ungültig."));
+            }
+        }
+        Some("linear-gradient") => {
+            known(paint, &["kind", "angle", "stops"], label)?;
+            finite_number(paint.get("angle"), &format!("{label}.angle"), -360.0, 360.0)?;
+            let stops = paint
+                .get("stops")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("{label}.stops fehlt."))?;
+            if stops.len() != 2 {
+                return Err(format!("{label}.stops braucht genau zwei Einträge."));
+            }
+            let mut previous = -1.0;
+            for stop in stops {
+                let stop = object(stop, &format!("{label}.stop"))?;
+                known(stop, &["color", "offset"], &format!("{label}.stop"))?;
+                if !valid_color(stop.get("color").and_then(Value::as_str).unwrap_or("")) {
+                    return Err(format!("{label}.stop.color ist ungültig."));
+                }
+                let offset = finite_number(
+                    stop.get("offset"),
+                    &format!("{label}.stop.offset"),
+                    0.0,
+                    1.0,
+                )?;
+                if offset < previous {
+                    return Err(format!("{label}.stops müssen sortiert sein."));
+                }
+                previous = offset;
+            }
+        }
+        _ => return Err(format!("{label}.kind ist ungültig.")),
+    }
+    Ok(())
+}
+fn validate_layer_style(value: &Value) -> Result<(), String> {
+    let style = object(value, "Layer.style")?;
+    known(
+        style,
+        &["opacity", "border", "borderRadius", "shadow"],
+        "Layer.style",
+    )?;
+    if style.get("opacity").is_some() {
+        finite_number(style.get("opacity"), "Layer.style.opacity", 0.0, 1.0)?;
+    }
+    if style.get("borderRadius").is_some() {
+        finite_number(
+            style.get("borderRadius"),
+            "Layer.style.borderRadius",
+            0.0,
+            32768.0,
+        )?;
+    }
+    if let Some(border) = style.get("border") {
+        let border = object(border, "Layer.style.border")?;
+        known(border, &["width", "color"], "Layer.style.border")?;
+        finite_number(border.get("width"), "Layer.style.border.width", 0.0, 256.0)?;
+        if !valid_color(border.get("color").and_then(Value::as_str).unwrap_or("")) {
+            return Err("Layer.style.border.color ist ungültig.".into());
+        }
+    }
+    if let Some(shadow) = style.get("shadow") {
+        let shadow = object(shadow, "Layer.style.shadow")?;
+        known(
+            shadow,
+            &["x", "y", "blur", "color", "opacity"],
+            "Layer.style.shadow",
+        )?;
+        finite_number(shadow.get("x"), "Layer.style.shadow.x", -2048.0, 2048.0)?;
+        finite_number(shadow.get("y"), "Layer.style.shadow.y", -2048.0, 2048.0)?;
+        finite_number(shadow.get("blur"), "Layer.style.shadow.blur", 0.0, 512.0)?;
+        finite_number(
+            shadow.get("opacity"),
+            "Layer.style.shadow.opacity",
+            0.0,
+            1.0,
+        )?;
+        if !valid_color(shadow.get("color").and_then(Value::as_str).unwrap_or("")) {
+            return Err("Layer.style.shadow.color ist ungültig.".into());
+        }
+    }
+    Ok(())
+}
 fn validate_binding(binding_id: &str, value: &Value) -> Result<(), String> {
     require_id(binding_id, "InputBinding-Schlüssel")?;
     let binding = object(value, "InputBinding")?;
@@ -355,7 +452,7 @@ fn validate_document(value: &Value) -> Result<(f64, f64), String> {
     let expected = match preset {
         "instagram-post" => (1080.0, 1080.0),
         "instagram-story" => (1080.0, 1920.0),
-        "youtube-thumbnail" => (1280.0, 720.0),
+        "youtube-thumbnail" => (1920.0, 1080.0),
         "meta-ad" => (1200.0, 628.0),
         _ => return Err("ArtboardDocument.format.preset ist ungültig.".into()),
     };
@@ -374,24 +471,12 @@ fn validate_document(value: &Value) -> Result<(f64, f64), String> {
     if (width, height) != expected {
         return Err("ArtboardDocument.format passt nicht zum Preset.".into());
     }
-    let paint = object(
+    validate_paint(
         document
             .get("paint")
             .ok_or("ArtboardDocument.paint fehlt.")?,
         "ArtboardDocument.paint",
     )?;
-    known(paint, &["kind", "color"], "ArtboardDocument.paint")?;
-    if paint.get("kind").and_then(Value::as_str) != Some("solid")
-        || paint.get("color").and_then(Value::as_str).is_none_or(|v| {
-            v.len() != 7
-                || !v.starts_with('#')
-                || !v[1..]
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || ('A'..='F').contains(&c))
-        })
-    {
-        return Err("ArtboardDocument.paint ist ungültig.".into());
-    }
     let bindings = document
         .get("bindings")
         .and_then(Value::as_object)
@@ -416,10 +501,11 @@ fn validate_document(value: &Value) -> Result<(f64, f64), String> {
         require_id(layer_id, "Layer-ID")?;
         let layer = object(value, "ArtboardLayer")?;
         let common = [
-            "id", "type", "name", "locked", "visible", "version", "geometry",
+            "id", "type", "name", "locked", "visible", "version", "geometry", "style",
         ];
         let specific: &[&str] = match layer.get("type").and_then(Value::as_str) {
             Some("group") => &["childIds"],
+            Some("container") => &["childIds", "layout", "fill"],
             Some("text") => &[
                 "text",
                 "color",
@@ -478,8 +564,11 @@ fn validate_document(value: &Value) -> Result<(f64, f64), String> {
         if x + w > width || y + h > height {
             return Err("Layer.geometry liegt außerhalb des Artboards.".into());
         }
+        if let Some(style) = layer.get("style") {
+            validate_layer_style(style)?;
+        }
         match layer.get("type").and_then(Value::as_str).unwrap() {
-            "group" => {
+            "group" | "container" => {
                 let ids = layer
                     .get("childIds")
                     .and_then(Value::as_array)
@@ -494,6 +583,75 @@ fn validate_document(value: &Value) -> Result<(f64, f64), String> {
                     group.push(child)
                 }
                 children.insert(layer_id.clone(), group);
+                if layer.get("type").and_then(Value::as_str) == Some("container") {
+                    validate_paint(
+                        layer.get("fill").ok_or("Container.fill fehlt.")?,
+                        "Container.fill",
+                    )?;
+                    let layout = object(
+                        layer.get("layout").ok_or("Container.layout fehlt.")?,
+                        "Container.layout",
+                    )?;
+                    match layout.get("mode").and_then(Value::as_str) {
+                        Some("free") => {
+                            known(layout, &["mode", "padding"], "Container.layout")?;
+                        }
+                        Some("flex") => {
+                            known(
+                                layout,
+                                &["mode", "direction", "gap", "padding", "justify", "align"],
+                                "Container.layout",
+                            )?;
+                            if !matches!(
+                                layout.get("direction").and_then(Value::as_str),
+                                Some("row" | "column")
+                            ) || !matches!(
+                                layout.get("justify").and_then(Value::as_str),
+                                Some("start" | "center" | "end" | "space-between")
+                            ) {
+                                return Err("Container.flex ist ungültig.".into());
+                            }
+                            finite_number(layout.get("gap"), "Container.layout.gap", 0.0, 32768.0)?;
+                        }
+                        Some("grid") => {
+                            known(
+                                layout,
+                                &["mode", "columns", "gap", "padding", "align"],
+                                "Container.layout",
+                            )?;
+                            let columns = finite_number(
+                                layout.get("columns"),
+                                "Container.layout.columns",
+                                1.0,
+                                12.0,
+                            )?;
+                            if columns.fract() != 0.0 {
+                                return Err("Container.layout.columns muss ganzzahlig sein.".into());
+                            }
+                            finite_number(layout.get("gap"), "Container.layout.gap", 0.0, 32768.0)?;
+                        }
+                        _ => return Err("Container.layout.mode ist ungültig.".into()),
+                    }
+                    let padding = finite_number(
+                        layout.get("padding"),
+                        "Container.layout.padding",
+                        0.0,
+                        32768.0,
+                    )?;
+                    if padding * 2.0 >= w.min(h) {
+                        return Err(
+                            "Container.layout.padding lässt keinen Inhaltsbereich übrig.".into(),
+                        );
+                    }
+                    if layout.get("mode").and_then(Value::as_str) != Some("free")
+                        && !matches!(
+                            layout.get("align").and_then(Value::as_str),
+                            Some("start" | "center" | "end" | "stretch")
+                        )
+                    {
+                        return Err("Container.layout.align ist ungültig.".into());
+                    }
+                }
             }
             "text" => {
                 safe_text(
@@ -631,21 +789,10 @@ fn validate_document(value: &Value) -> Result<(f64, f64), String> {
                 ) {
                     return Err("ShapeLayer.shape ist ungültig.".into());
                 }
-                let fill = layer
-                    .get("fill")
-                    .and_then(Value::as_object)
-                    .ok_or("ShapeLayer.fill fehlt.")?;
-                known(fill, &["kind", "color"], "ShapeLayer.fill")?;
-                let color = fill.get("color").and_then(Value::as_str).unwrap_or("");
-                if fill.get("kind").and_then(Value::as_str) != Some("solid")
-                    || color.len() != 7
-                    || !color.starts_with('#')
-                    || !color[1..]
-                        .chars()
-                        .all(|c| c.is_ascii_digit() || ('A'..='F').contains(&c))
-                {
-                    return Err("ShapeLayer.fill ist ungültig.".into());
-                }
+                validate_paint(
+                    layer.get("fill").ok_or("ShapeLayer.fill fehlt.")?,
+                    "ShapeLayer.fill",
+                )?;
             }
             _ => {}
         }
@@ -2221,5 +2368,18 @@ mod tests {
         current["boards"]["board-1"]["document"]["rootLayerIds"] = json!(["text-font"]);
         current["boards"]["board-1"]["document"]["layers"] = json!({"text-font":{"id":"text-font","type":"text","name":"Titel","locked":false,"visible":true,"version":1,"geometry":{"x":0,"y":0,"width":300,"height":100,"rotation":12},"text":"FlowZ","color":"#111111","fontRef":"font-a","fontFamily":"Inter","fontHash":"a".repeat(64),"fontWeight":500,"fontStyle":"normal","fontAxes":{"wght":500},"fontSize":32,"align":"left"}});
         assert!(validate_workspace(&current, "workspace-font").is_ok());
+        let mut layout = workspace("workspace-layout", "revision-layout");
+        layout["boards"]["board-1"]["document"]["paint"] = json!({"kind":"linear-gradient","angle":90,"stops":[{"color":"#111111","offset":0},{"color":"#222222","offset":1}]});
+        layout["boards"]["board-1"]["document"]["rootLayerIds"] = json!(["layout-1"]);
+        layout["boards"]["board-1"]["document"]["layers"] = json!({
+            "layout-1":{"id":"layout-1","type":"container","name":"Layout","locked":false,"visible":true,"version":1,"geometry":{"x":100,"y":100,"width":800,"height":400,"rotation":0},"childIds":["card-1"],"layout":{"mode":"flex","direction":"row","gap":16,"padding":24,"justify":"start","align":"stretch"},"fill":{"kind":"linear-gradient","angle":135,"stops":[{"color":"#EE3399","offset":0},{"color":"#5533EE","offset":1}]},"style":{"opacity":0.9,"border":{"width":2,"color":"#FFFFFF"},"borderRadius":20,"shadow":{"x":0,"y":12,"blur":24,"color":"#000000","opacity":0.4}}},
+            "card-1":{"id":"card-1","type":"shape","name":"Card","locked":false,"visible":true,"version":1,"geometry":{"x":0,"y":0,"width":200,"height":100,"rotation":0},"shape":"rectangle","fill":{"kind":"solid","color":"#111111"}}
+        });
+        assert!(validate_workspace(&layout, "workspace-layout").is_ok());
+        layout["boards"]["board-1"]["document"]["layers"]["layout-1"]["style"]["externalCss"] =
+            json!("https://evil.test/style.css");
+        assert!(validate_workspace(&layout, "workspace-layout")
+            .unwrap_err()
+            .contains("unbekannte Feld"));
     }
 }

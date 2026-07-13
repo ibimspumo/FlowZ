@@ -21,6 +21,7 @@ export type ArtboardWorkspaceOperation =
   | { type: "delete-layers"; boardId: string; layerIds: string[] }
   | { type: "reorder-layer"; boardId: string; layerId: string; direction: "forward" | "backward" }
   | { type: "create-board"; board: ArtboardBoard; placement: { x: number; y: number } }
+  | { type: "delete-board"; boardId: string }
   | { type: "set-board-inputs"; boardId: string; snapshot: ArtboardInputSnapshot };
 
 export type ArtboardOperationBatch = {
@@ -71,6 +72,7 @@ export type ArtboardWorkspaceProps = {
   onRedo: () => void;
   onExport: (boardIds: string[]) => void;
   onInsertAsset?: (asset: ArtboardAssetItem, destination?: {boardId?:string;layerId?:string;x?:number;y?:number}) => void;
+  onImportImage?: (file:File,destination?:{boardId?:string;layerId?:string;x?:number;y?:number})=>void|Promise<void>;
   agent?: {
     branchId: string;
     adapterFactory: AgentAdapterFactory;
@@ -94,7 +96,7 @@ export type WorkspacePanel = "layers" | "assets" | "inputs";
 export const ARTBOARD_PRESET_OPTIONS: { value: ArtboardPreset; label: string }[] = [
   { value: "instagram-post", label: "Instagram Post · 1080 × 1080" },
   { value: "instagram-story", label: "Instagram Story · 1080 × 1920" },
-  { value: "youtube-thumbnail", label: "YouTube Thumbnail · 1280 × 720" },
+  { value: "youtube-thumbnail", label: "YouTube Thumbnail · 1920 × 1080" },
   { value: "meta-ad", label: "Meta Ad · 1200 × 628" },
 ];
 

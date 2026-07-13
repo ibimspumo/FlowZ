@@ -55,7 +55,7 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ASPECT_RATIO = /^\d{1,2}:\d{1,2}$/;
 const ALLOWED_OPERATION_TYPES = new Set([
   "rename-board", "set-board-format", "set-board-paint", "update-layer",
-  "set-layer-tree", "delete-layers", "reorder-layer",
+  "set-layer-tree", "delete-layers", "reorder-layer", "create-board", "delete-board",
 ]);
 
 const canonical = (value: unknown): string => {
@@ -90,8 +90,10 @@ function validateIntent(value: unknown) {
 }
 
 function validateOperation(value: unknown) {
-  const operation = exactObject(value, ["type", "boardId", "name", "format", "color", "layerId", "patch", "layers", "rootLayerIds", "layerIds", "direction"], "Artboard-Operation");
-  if (typeof operation.type !== "string" || !ALLOWED_OPERATION_TYPES.has(operation.type) || !validId(operation.boardId)) throw new Error("Persistierter Artboard-Vorschlag enthält eine nicht freigegebene Operation.");
+  const operation = exactObject(value, ["type", "boardId", "name", "format", "color", "layerId", "patch", "layers", "rootLayerIds", "layerIds", "direction", "board", "placement"], "Artboard-Operation");
+  if (typeof operation.type !== "string" || !ALLOWED_OPERATION_TYPES.has(operation.type)) throw new Error("Persistierter Artboard-Vorschlag enthält eine nicht freigegebene Operation.");
+  if(operation.type==="create-board") { const board=exactObject(operation.board,["id","name","activeRevisionId","document","inputSnapshot","ancestry","createdAt"],"Vorschlags-Board");const placement=exactObject(operation.placement,["x","y"],"Vorschlags-Platzierung");if(!validId(board.id)||typeof placement.x!=="number"||!Number.isFinite(placement.x)||typeof placement.y!=="number"||!Number.isFinite(placement.y))throw new Error("Persistierter Artboard-Vorschlag enthält ein ungültiges neues Board."); }
+  else if(!validId(operation.boardId))throw new Error("Persistierter Artboard-Vorschlag enthält eine Operation ohne Board-ID.");
   boundedJson(operation, 256 * 1024, "Artboard-Operation");
 }
 

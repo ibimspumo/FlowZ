@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ARTBOARD_FORMATS, type ArtboardDocument, type TextLayer } from "./artboard-domain";
 import { createArtboardRenderPlan, layoutText, renderArtboardPngFromDocument, renderArtboardPreviewHtml, renderArtboardSvg } from "./artboard-renderer";
 
-const document: ArtboardDocument = { schemaVersion: 1, id: "document-1", name: "Test", format: { preset: "youtube-thumbnail", width: ARTBOARD_FORMATS["youtube-thumbnail"].width, height: ARTBOARD_FORMATS["youtube-thumbnail"].height }, paint: { kind: "solid", color: "#111111" }, rootLayerIds: ["shape-1", "text-1"], layers: { "shape-1": { id: "shape-1", type: "shape", name: "Fläche", locked: false, visible: true, version: 1, geometry: { x: 0, y: 0, width: 1280, height: 720, rotation: 0 }, shape: "rectangle", fill: { kind: "solid", color: "#FF0088" } }, "text-1": { id: "text-1", type: "text", name: "Titel", locked: false, visible: true, version: 1, geometry: { x: 80, y: 80, width: 420, height: 220, rotation: 12 }, text: "Klar & sicher\nÜberall", color: "#FFFFFF", fontSize: 64, align: "center" } }, bindings: {}, tokenRefs: {} };
+const document: ArtboardDocument = { schemaVersion: 1, id: "document-1", name: "Test", format: { preset: "youtube-thumbnail", width: ARTBOARD_FORMATS["youtube-thumbnail"].width, height: ARTBOARD_FORMATS["youtube-thumbnail"].height }, paint: { kind: "solid", color: "#111111" }, rootLayerIds: ["shape-1", "text-1"], layers: { "shape-1": { id: "shape-1", type: "shape", name: "Fläche", locked: false, visible: true, version: 1, geometry: { x: 0, y: 0, width: 1920, height: 1080, rotation: 0 }, shape: "rectangle", fill: { kind: "solid", color: "#FF0088" } }, "text-1": { id: "text-1", type: "text", name: "Titel", locked: false, visible: true, version: 1, geometry: { x: 80, y: 80, width: 420, height: 220, rotation: 12 }, text: "Klar & sicher\nÜberall", color: "#FFFFFF", fontSize: 64, align: "center" } }, bindings: {}, tokenRefs: {} };
 
 describe("canonical artboard rendering", () => {
   it("uses exactly the same deterministic SVG for preview and PNG rasterization", async () => {
@@ -17,6 +17,12 @@ describe("canonical artboard rendering", () => {
     const layout = layoutText(layer); expect(layout?.lines).toHaveLength(2); expect(layout?.lines[1].text.endsWith("…")).toBe(true);
     const svg = renderArtboardSvg({ ...document, layers: { ...document.layers, "text-1": layer } }, () => "");
     expect(svg).toContain("clip-path"); expect(svg).toContain("rotate(12"); expect(svg).toContain("font-family=\"Arial\"");
+  });
+
+  it("renders a system font family without requiring a CAS font hash", () => {
+    const layer = { ...(structuredClone(document.layers["text-1"]) as TextLayer), fontFamily: "Georgia" };
+    const svg = renderArtboardSvg({ ...document, layers: { ...document.layers, "text-1": layer } }, () => "");
+    expect(svg).toContain('font-family="Georgia"');
   });
 
   it("uses canonical SVG aspect-ratio modes for image fit", () => {

@@ -53,12 +53,16 @@ struct AgentRepositoryFile {
 pub struct AgentSession {
     workspace_id: String,
     branch_id: String,
+    #[serde(default = "legacy_conversation_id")]
+    conversation_id: String,
     provider: String,
     tool_contract_version: String,
     provider_session_id: String,
     model_id: String,
     reasoning_effort: Option<String>,
     last_turn_id: Option<String>,
+    #[serde(default)]
+    manual_context_checkpoint: Option<Value>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -67,6 +71,8 @@ pub struct AgentRun {
     run_id: String,
     workspace_id: String,
     branch_id: String,
+    #[serde(default = "legacy_conversation_id")]
+    conversation_id: String,
     provider: String,
     tool_contract_version: String,
     provider_session_id: String,
@@ -97,6 +103,7 @@ pub struct AgentUsage {
 pub struct SessionKey {
     workspace_id: String,
     branch_id: String,
+    conversation_id: String,
     provider: String,
     tool_contract_version: String,
 }
@@ -335,6 +342,30 @@ fn valid_record_id(value: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "._:-".contains(c))
 }
+const LEGACY_CONVERSATION_ID: &str = "conversation-legacy";
+fn legacy_conversation_id() -> String {
+    LEGACY_CONVERSATION_ID.into()
+}
+fn valid_conversation_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._:-".contains(c))
+}
+const ARTBOARD_TOOL_CONTRACT_VERSION: &str = "flowz-artboard-tools-v2";
+fn validate_session_key(value: &SessionKey) -> Result<(), String> {
+    if valid_record_id(&value.workspace_id)
+        && valid_record_id(&value.branch_id)
+        && valid_conversation_id(&value.conversation_id)
+        && matches!(value.provider.as_str(), "openrouter" | "codex-local")
+        && value.tool_contract_version == ARTBOARD_TOOL_CONTRACT_VERSION
+    {
+        Ok(())
+    } else {
+        Err("Ungültiger Artboard-Agent-Session-Schlüssel.".into())
+    }
+}
 fn validate_session(value: &AgentSession) -> Result<(), String> {
     if [
         &value.workspace_id,
@@ -344,9 +375,24 @@ fn validate_session(value: &AgentSession) -> Result<(), String> {
     ]
     .iter()
     .all(|v| valid_record_id(v))
+        && valid_conversation_id(&value.conversation_id)
         && matches!(value.provider.as_str(), "openrouter" | "codex-local")
-        && value.tool_contract_version == "flowz-artboard-tools-v1"
+        && value.tool_contract_version == ARTBOARD_TOOL_CONTRACT_VERSION
     {
+        if let Some(checkpoint) = &value.manual_context_checkpoint {
+            let bytes = serde_json::to_vec(checkpoint).map_err(|error| error.to_string())?;
+            let valid_shape = checkpoint.as_object().is_some_and(|item| {
+                item.get("schemaVersion").and_then(Value::as_u64) == Some(1)
+                    && item.get("revision").is_some_and(Value::is_object)
+                    && item
+                        .get("boards")
+                        .and_then(Value::as_array)
+                        .is_some_and(|boards| boards.len() <= 24)
+            });
+            if bytes.len() > 64 * 1024 || !valid_shape {
+                return Err("Ungültiger oder zu großer Artboard-Kontext-Checkpoint.".into());
+            }
+        }
         Ok(())
     } else {
         Err("Ungültige Artboard-Agent-Session.".into())
@@ -355,27 +401,103 @@ fn validate_session(value: &AgentSession) -> Result<(), String> {
 fn validate_run(value: &AgentRun) -> Result<(), String> {
     if !valid_record_id(&value.run_id)
         || value.input_revision < 0
+        || value.submitted_at.len() > 64
+        || chrono::DateTime::parse_from_rfc3339(&value.submitted_at).is_err()
         || value.selected_board_revision_ids.len() > 64
         || !value
             .selected_board_revision_ids
             .iter()
             .all(|v| valid_record_id(v))
+        || !matches!(
+            value.state.as_str(),
+            "idle"
+                | "submitting"
+                | "streaming"
+                | "tool-executing"
+                | "cancel-requested"
+                | "interrupted"
+                | "finalizing"
+                | "proposal-ready"
+                | "applying"
+                | "rejecting"
+                | "applied"
+                | "rejected"
+                | "failed"
+                | "process-lost"
+                | "recovering"
+                | "unknown"
+        )
     {
         return Err("Ungültiger Artboard-Agentlauf.".into());
     }
     validate_session(&AgentSession {
         workspace_id: value.workspace_id.clone(),
         branch_id: value.branch_id.clone(),
+        conversation_id: value.conversation_id.clone(),
         provider: value.provider.clone(),
         tool_contract_version: value.tool_contract_version.clone(),
         provider_session_id: value.provider_session_id.clone(),
         model_id: value.model_id.clone(),
         reasoning_effort: value.reasoning_effort.clone(),
         last_turn_id: value.provider_turn_id.clone(),
+        manual_context_checkpoint: None,
     })
 }
 
-const CODEX_INSTRUCTIONS: &str = "You are FlowZ's Artboard design agent. Use only the supplied dynamic Artboard tools. Read bounded state, then create proposal operations. Never use shell, files, URLs, web, MCP, apps, skills, or built-in tools. Never claim that a proposal is applied. Finish only after finish_working.";
+fn session_matches_key(session: &AgentSession, key: &SessionKey) -> bool {
+    session.workspace_id == key.workspace_id
+        && session.branch_id == key.branch_id
+        && session.conversation_id == key.conversation_id
+        && session.provider == key.provider
+        && session.tool_contract_version == key.tool_contract_version
+}
+
+fn same_session_identity(left: &AgentSession, right: &AgentSession) -> bool {
+    left.workspace_id == right.workspace_id
+        && left.branch_id == right.branch_id
+        && left.conversation_id == right.conversation_id
+        && left.provider == right.provider
+        && left.tool_contract_version == right.tool_contract_version
+}
+
+fn upsert_session(file: &mut AgentRepositoryFile, session: AgentSession) {
+    file.sessions
+        .retain(|item| !same_session_identity(item, &session));
+    file.sessions.push(session);
+}
+
+fn run_matches_key(run: &AgentRun, key: &SessionKey) -> bool {
+    run.workspace_id == key.workspace_id
+        && run.branch_id == key.branch_id
+        && run.conversation_id == key.conversation_id
+        && run.provider == key.provider
+        && run.tool_contract_version == key.tool_contract_version
+}
+
+fn latest_run_for_key(
+    file: &AgentRepositoryFile,
+    key: &SessionKey,
+) -> Result<Option<AgentRun>, String> {
+    validate_session_key(key)?;
+    let mut latest: Option<(chrono::DateTime<chrono::FixedOffset>, usize, &AgentRun)> = None;
+    for (stored_order, run) in file.runs.iter().enumerate() {
+        if !run_matches_key(run, key) {
+            continue;
+        }
+        validate_run(run)?;
+        let submitted_at = chrono::DateTime::parse_from_rfc3339(&run.submitted_at)
+            .map_err(|_| "Ungültiger Artboard-Agentlauf.".to_string())?;
+        if latest.as_ref().is_none_or(|(latest_at, latest_order, _)| {
+            submitted_at > *latest_at
+                || (submitted_at == *latest_at && stored_order > *latest_order)
+        }) {
+            latest = Some((submitted_at, stored_order, run));
+        }
+    }
+    Ok(latest.map(|(_, _, run)| run.clone()))
+}
+
+const CODEX_INSTRUCTIONS: &str = "You are FlowZ's Artboard design agent. Use only the supplied dynamic Artboard tools. Read bounded state, then create proposal operations. Keep small requested edits on the existing board. For a new direction, variant, or format adaptation, use create_board or duplicate_board_as_variant so the original remains and the collision-free result is placed beside it; multiple boards may have different supported sizes. Use delete_board only when the user explicitly asks to remove that whole Artboard; it is proposal-only and the user still confirms it in FlowZ. Never remove the final Artboard. After drafting writes, call render_preview with the same proposalId and visually inspect the returned image for overlap, crop, contrast, and hierarchy. If you identify a concrete issue, make at most one targeted correction call and then call render_preview again to verify it. Only then call finish_working. Never use shell, files, URLs, web, MCP, apps, skills, or built-in tools. Never claim that a proposal is applied.";
 
 fn exact_keys(object: &serde_json::Map<String, Value>, expected: &[&str]) -> bool {
     object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
@@ -593,21 +715,42 @@ fn validate_codex_tool_response(value: &Value) -> Result<(), String> {
     let items = object
         .get("contentItems")
         .and_then(Value::as_array)
-        .filter(|items| items.len() == 1)
-        .ok_or("Codex-Toolantwort benötigt genau einen Textblock.")?;
-    let item = items[0]
+        .filter(|items| (1..=2).contains(&items.len()))
+        .ok_or("Codex-Toolantwort benötigt einen Textblock und optional genau ein lokales Vorschaubild.")?;
+    let text_item = items[0]
         .as_object()
         .filter(|item| {
             exact_keys(item, &["type", "text"])
                 && item.get("type").and_then(Value::as_str) == Some("inputText")
         })
         .ok_or("Ungültiger Codex-Toolantwortblock.")?;
-    if item
+    if text_item
         .get("text")
         .and_then(Value::as_str)
         .is_none_or(|text| text.len() > 64 * 1024)
     {
         return Err("Codex-Toolantwort ist zu groß.".into());
+    }
+    if let Some(image) = items.get(1) {
+        let image = image
+            .as_object()
+            .filter(|item| {
+                exact_keys(item, &["type", "imageUrl"])
+                    && item.get("type").and_then(Value::as_str) == Some("inputImage")
+            })
+            .ok_or("Ungültiger Codex-Vorschaubildblock.")?;
+        let url = image
+            .get("imageUrl")
+            .and_then(Value::as_str)
+            .ok_or("Codex-Vorschaubild fehlt.")?;
+        if url.len() > 6 * 1024 * 1024
+            || !url.starts_with("data:image/png;base64,")
+            || !url["data:image/png;base64,".len()..]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+        {
+            return Err("Codex-Vorschaubild muss ein begrenztes lokales PNG sein.".into());
+        }
     }
     Ok(())
 }
@@ -617,16 +760,16 @@ pub fn artboard_agent_session_find(
     key: SessionKey,
     state: tauri::State<'_, AgentRepositoryState>,
 ) -> Result<Option<AgentSession>, String> {
+    validate_session_key(&key)?;
     let _guard = state
         .lock
         .lock()
         .map_err(|_| "Agentzustand ist gesperrt.".to_string())?;
-    Ok(state.load()?.sessions.into_iter().find(|item| {
-        item.workspace_id == key.workspace_id
-            && item.branch_id == key.branch_id
-            && item.provider == key.provider
-            && item.tool_contract_version == key.tool_contract_version
-    }))
+    Ok(state
+        .load()?
+        .sessions
+        .into_iter()
+        .find(|item| session_matches_key(item, &key)))
 }
 #[tauri::command]
 pub fn artboard_agent_session_save(
@@ -639,13 +782,7 @@ pub fn artboard_agent_session_save(
         .lock()
         .map_err(|_| "Agentzustand ist gesperrt.".to_string())?;
     let mut file = state.load()?;
-    file.sessions.retain(|item| {
-        !(item.workspace_id == session.workspace_id
-            && item.branch_id == session.branch_id
-            && item.provider == session.provider
-            && item.tool_contract_version == session.tool_contract_version)
-    });
-    file.sessions.push(session);
+    upsert_session(&mut file, session);
     state.save(&file)
 }
 #[tauri::command]
@@ -662,6 +799,18 @@ pub fn artboard_agent_run_save(
     file.runs.retain(|item| item.run_id != run.run_id);
     file.runs.push(run);
     state.save(&file)
+}
+#[tauri::command]
+pub fn artboard_agent_run_find_latest(
+    key: SessionKey,
+    state: tauri::State<'_, AgentRepositoryState>,
+) -> Result<Option<AgentRun>, String> {
+    validate_session_key(&key)?;
+    let _guard = state
+        .lock
+        .lock()
+        .map_err(|_| "Agentzustand ist gesperrt.".to_string())?;
+    latest_run_for_key(&state.load()?, &key)
 }
 #[tauri::command]
 pub fn artboard_agent_usage_save(
@@ -754,6 +903,13 @@ fn validate_proposal(value: &Value) -> Result<(), String> {
         let operation = operation
             .as_object()
             .ok_or("Artboard-Agentoperation muss ein Objekt sein.")?;
+        if serde_json::to_vec(operation)
+            .map_err(|e| e.to_string())?
+            .len()
+            > 256 * 1024
+        {
+            return Err("Artboard-Agentoperation ist zu groß.".into());
+        }
         let allowed_types = [
             "rename-board",
             "set-board-format",
@@ -762,15 +918,65 @@ fn validate_proposal(value: &Value) -> Result<(), String> {
             "set-layer-tree",
             "delete-layers",
             "reorder-layer",
+            "create-board",
+            "delete-board",
         ];
-        if !operation
+        let operation_type = operation
             .get("type")
             .and_then(Value::as_str)
-            .is_some_and(|kind| allowed_types.contains(&kind))
-            || !operation
-                .get("boardId")
-                .and_then(Value::as_str)
-                .is_some_and(valid_record_id)
+            .filter(|kind| allowed_types.contains(kind))
+            .ok_or("Artboard-Agentvorschlag enthält eine nicht freigegebene Operation.")?;
+        if operation_type == "create-board" {
+            let board = operation
+                .get("board")
+                .and_then(Value::as_object)
+                .ok_or("Artboard-Agentvorschlag enthält ein ungültiges neues Board.")?;
+            let placement = operation
+                .get("placement")
+                .and_then(Value::as_object)
+                .ok_or("Artboard-Agentvorschlag enthält ein ungültiges neues Board.")?;
+            if !exact_keys(
+                board,
+                &[
+                    "id",
+                    "name",
+                    "activeRevisionId",
+                    "document",
+                    "inputSnapshot",
+                    "ancestry",
+                    "createdAt",
+                ],
+            ) || !exact_keys(placement, &["x", "y"])
+                || !board
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(valid_record_id)
+                || !placement
+                    .get("x")
+                    .and_then(Value::as_f64)
+                    .is_some_and(f64::is_finite)
+                || !placement
+                    .get("y")
+                    .and_then(Value::as_f64)
+                    .is_some_and(f64::is_finite)
+            {
+                return Err("Artboard-Agentvorschlag enthält ein ungültiges neues Board.".into());
+            }
+        } else if operation_type == "delete-board" {
+            if !exact_keys(operation, &["type", "boardId"])
+                || !operation
+                    .get("boardId")
+                    .and_then(Value::as_str)
+                    .is_some_and(valid_record_id)
+            {
+                return Err(
+                    "Artboard-Agentvorschlag enthält eine ungültige Board-Entfernung.".into(),
+                );
+            }
+        } else if !operation
+            .get("boardId")
+            .and_then(Value::as_str)
+            .is_some_and(valid_record_id)
         {
             return Err(
                 "Artboard-Agentvorschlag enthält eine nicht freigegebene Operation.".into(),
@@ -1092,6 +1298,9 @@ const ARTBOARD_TOOLS: &[&str] = &[
     "get_layers",
     "get_bound_inputs",
     "render_preview",
+    "create_board",
+    "duplicate_board_as_variant",
+    "delete_board",
     "create_layers",
     "update_layers",
     "delete_layers",
@@ -1259,6 +1468,49 @@ pub fn openrouter_artboard_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_session(conversation_id: &str, provider_session_id: &str) -> AgentSession {
+        AgentSession {
+            workspace_id: "workspace-1".into(),
+            branch_id: "branch-main".into(),
+            conversation_id: conversation_id.into(),
+            provider: "openrouter".into(),
+            tool_contract_version: ARTBOARD_TOOL_CONTRACT_VERSION.into(),
+            provider_session_id: provider_session_id.into(),
+            model_id: "model-1".into(),
+            reasoning_effort: None,
+            last_turn_id: None,
+            manual_context_checkpoint: None,
+        }
+    }
+
+    fn test_run(
+        run_id: &str,
+        conversation_id: &str,
+        submitted_at: &str,
+        state: &str,
+        proposal_id: Option<&str>,
+    ) -> AgentRun {
+        AgentRun {
+            run_id: run_id.into(),
+            workspace_id: "workspace-1".into(),
+            branch_id: "branch-main".into(),
+            conversation_id: conversation_id.into(),
+            provider: "openrouter".into(),
+            tool_contract_version: ARTBOARD_TOOL_CONTRACT_VERSION.into(),
+            provider_session_id: format!("provider-{conversation_id}"),
+            provider_turn_id: Some(format!("turn-{run_id}")),
+            model_id: "model-1".into(),
+            reasoning_effort: None,
+            input_revision: 1,
+            selected_board_revision_ids: Vec::new(),
+            state: state.into(),
+            submitted_at: submitted_at.into(),
+            proposal_id: proposal_id.map(str::to_owned),
+            error: None,
+        }
+    }
+
     #[test]
     fn openrouter_body_requires_exact_artboard_tool_surface() {
         let tools = ARTBOARD_TOOLS.iter().map(|name| json!({"type":"function","function":{"name":name,"description":"Bounded Artboard tool.","parameters":{"type":"object"}}})).collect::<Vec<_>>();
@@ -1321,12 +1573,13 @@ mod tests {
     }
 
     #[test]
-    fn codex_tool_response_is_text_only_and_bounded() {
+    fn codex_tool_response_accepts_only_bounded_local_preview_images() {
         assert!(validate_codex_tool_response(
             &json!({"contentItems":[{"type":"inputText","text":"{\"ok\":true}"}],"success":true})
         )
         .is_ok());
-        assert!(validate_codex_tool_response(&json!({"contentItems":[{"type":"inputImage","imageUrl":"https://example.com/x"}],"success":true})).is_err());
+        assert!(validate_codex_tool_response(&json!({"contentItems":[{"type":"inputText","text":"{\"preview\":true}"},{"type":"inputImage","imageUrl":"data:image/png;base64,iVBORw0KGgo="}],"success":true})).is_ok());
+        assert!(validate_codex_tool_response(&json!({"contentItems":[{"type":"inputText","text":"x"},{"type":"inputImage","imageUrl":"https://example.com/x"}],"success":true})).is_err());
         assert!(validate_codex_tool_response(
             &json!({"contentItems":[],"success":true,"token":"secret"})
         )
@@ -1337,16 +1590,7 @@ mod tests {
     fn agent_repository_roundtrips_without_credentials() {
         let temporary = tempfile::tempdir().unwrap();
         let repository = AgentRepositoryState::new(temporary.path());
-        let session = AgentSession {
-            workspace_id: "workspace-1".into(),
-            branch_id: "branch-main".into(),
-            provider: "openrouter".into(),
-            tool_contract_version: "flowz-artboard-tools-v1".into(),
-            provider_session_id: "session-1".into(),
-            model_id: "model-1".into(),
-            reasoning_effort: None,
-            last_turn_id: None,
-        };
+        let session = test_session("conversation-1", "session-1");
         validate_session(&session).unwrap();
         let mut file = repository.load().unwrap();
         file.sessions.push(session);
@@ -1354,6 +1598,205 @@ mod tests {
         let bytes = fs::read(&repository.path).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("sk-or-"));
         assert_eq!(repository.load().unwrap().sessions.len(), 1);
+    }
+
+    #[test]
+    fn agent_sessions_are_isolated_by_bounded_conversation_id() {
+        let mut file = AgentRepositoryFile::default();
+        let mut first = test_session("conversation-1", "provider-session-1");
+        first.last_turn_id = Some("turn-1".into());
+        let mut second = test_session("conversation-2", "provider-session-2");
+        second.last_turn_id = Some("turn-2".into());
+        upsert_session(&mut file, first);
+        upsert_session(&mut file, second);
+
+        assert_eq!(file.sessions.len(), 2);
+        let key = SessionKey {
+            workspace_id: "workspace-1".into(),
+            branch_id: "branch-main".into(),
+            conversation_id: "conversation-2".into(),
+            provider: "openrouter".into(),
+            tool_contract_version: ARTBOARD_TOOL_CONTRACT_VERSION.into(),
+        };
+        validate_session_key(&key).unwrap();
+        let found = file
+            .sessions
+            .iter()
+            .find(|session| session_matches_key(session, &key))
+            .unwrap();
+        assert_eq!(found.provider_session_id, "provider-session-2");
+        assert_eq!(found.last_turn_id.as_deref(), Some("turn-2"));
+
+        let replacement = test_session("conversation-2", "provider-session-2b");
+        upsert_session(&mut file, replacement);
+        assert_eq!(file.sessions.len(), 2);
+        assert!(file
+            .sessions
+            .iter()
+            .any(|session| session.provider_session_id == "provider-session-1"));
+        assert!(file
+            .sessions
+            .iter()
+            .any(|session| session.provider_session_id == "provider-session-2b"));
+
+        for invalid in ["", "contains/slash"] {
+            let invalid = test_session(invalid, "provider-session");
+            assert!(validate_session(&invalid).is_err());
+        }
+        assert!(validate_session(&test_session(&"x".repeat(129), "provider-session")).is_err());
+    }
+
+    #[test]
+    fn latest_run_returns_proposal_ready_run_for_exact_conversation_only() {
+        let key = SessionKey {
+            workspace_id: "workspace-1".into(),
+            branch_id: "branch-main".into(),
+            conversation_id: "conversation-1".into(),
+            provider: "openrouter".into(),
+            tool_contract_version: ARTBOARD_TOOL_CONTRACT_VERSION.into(),
+        };
+        let mut file = AgentRepositoryFile::default();
+        file.runs.push(test_run(
+            "run-old",
+            "conversation-1",
+            "2026-07-12T10:00:00Z",
+            "failed",
+            None,
+        ));
+        file.runs.push(test_run(
+            "run-ready",
+            "conversation-1",
+            "2026-07-12T11:00:00Z",
+            "proposal-ready",
+            Some("proposal-1"),
+        ));
+        file.runs.push(test_run(
+            "run-other-chat",
+            "conversation-2",
+            "2026-07-13T12:00:00Z",
+            "proposal-ready",
+            Some("proposal-other"),
+        ));
+
+        let latest = latest_run_for_key(&file, &key).unwrap().unwrap();
+        assert_eq!(latest.run_id, "run-ready");
+        assert_eq!(latest.state, "proposal-ready");
+        assert_eq!(latest.proposal_id.as_deref(), Some("proposal-1"));
+
+        let other_key = SessionKey {
+            conversation_id: "conversation-2".into(),
+            ..key
+        };
+        let other = latest_run_for_key(&file, &other_key).unwrap().unwrap();
+        assert_eq!(other.run_id, "run-other-chat");
+    }
+
+    #[test]
+    fn run_repository_accepts_only_known_states_including_terminal_review_outcomes() {
+        for state in ["applied", "rejected"] {
+            assert!(validate_run(&test_run(
+                "run-terminal",
+                "conversation-1",
+                "2026-07-12T11:00:00Z",
+                state,
+                Some("proposal-1")
+            ))
+            .is_ok());
+        }
+        assert!(validate_run(&test_run(
+            "run-invalid",
+            "conversation-1",
+            "2026-07-12T11:00:00Z",
+            "silently-resubmit",
+            None
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn latest_run_uses_persisted_run_order_for_equal_submission_times() {
+        let key = SessionKey {
+            workspace_id: "workspace-1".into(),
+            branch_id: "branch-main".into(),
+            conversation_id: "conversation-1".into(),
+            provider: "openrouter".into(),
+            tool_contract_version: ARTBOARD_TOOL_CONTRACT_VERSION.into(),
+        };
+        let submitted_at = "2026-07-12T11:00:00Z";
+        let mut file = AgentRepositoryFile::default();
+        file.runs.push(test_run(
+            "run-first",
+            "conversation-1",
+            submitted_at,
+            "failed",
+            None,
+        ));
+        file.runs.push(test_run(
+            "run-second",
+            "conversation-1",
+            submitted_at,
+            "proposal-ready",
+            Some("proposal-2"),
+        ));
+
+        assert_eq!(
+            latest_run_for_key(&file, &key).unwrap().unwrap().run_id,
+            "run-second"
+        );
+    }
+
+    #[test]
+    fn legacy_single_chat_session_gets_stable_default_conversation() {
+        let raw = json!({
+            "sessions": [{
+                "workspaceId": "workspace-1",
+                "branchId": "branch-main",
+                "provider": "openrouter",
+                "toolContractVersion": ARTBOARD_TOOL_CONTRACT_VERSION,
+                "providerSessionId": "legacy-provider-session",
+                "modelId": "model-1",
+                "reasoningEffort": null,
+                "lastTurnId": "legacy-turn"
+            }],
+            "runs": [{
+                "runId": "legacy-run",
+                "workspaceId": "workspace-1",
+                "branchId": "branch-main",
+                "provider": "openrouter",
+                "toolContractVersion": ARTBOARD_TOOL_CONTRACT_VERSION,
+                "providerSessionId": "legacy-provider-session",
+                "providerTurnId": "legacy-turn",
+                "modelId": "model-1",
+                "reasoningEffort": null,
+                "inputRevision": 1,
+                "selectedBoardRevisionIds": [],
+                "state": "failed",
+                "submittedAt": "2026-07-12T10:00:00Z",
+                "proposalId": null,
+                "error": null
+            }],
+            "usage": [],
+            "proposals": []
+        });
+        let migrated: AgentRepositoryFile = serde_json::from_value(raw).unwrap();
+        assert_eq!(migrated.sessions[0].conversation_id, LEGACY_CONVERSATION_ID);
+        assert_eq!(migrated.runs[0].conversation_id, LEGACY_CONVERSATION_ID);
+        assert_eq!(
+            migrated.sessions[0].provider_session_id,
+            "legacy-provider-session"
+        );
+        assert_eq!(
+            migrated.sessions[0].last_turn_id.as_deref(),
+            Some("legacy-turn")
+        );
+        validate_session(&migrated.sessions[0]).unwrap();
+        validate_run(&migrated.runs[0]).unwrap();
+
+        let serialized = serde_json::to_value(migrated).unwrap();
+        assert_eq!(
+            serialized["sessions"][0]["conversationId"],
+            LEGACY_CONVERSATION_ID
+        );
     }
 
     #[test]
@@ -1382,11 +1825,93 @@ mod tests {
         let mut changed = proposal.clone();
         changed["updatedAt"] = json!("2026-07-12T12:00:02.000Z");
         assert!(validate_proposal_transition(&proposal, &changed).is_err());
-        assert_eq!(ARTBOARD_TOOLS.len(), 16);
+        assert_eq!(ARTBOARD_TOOLS.len(), 19);
         let unique = ARTBOARD_TOOLS
             .iter()
             .copied()
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(unique.len(), ARTBOARD_TOOLS.len());
+    }
+
+    #[test]
+    fn proposal_validator_accepts_empty_story_board_created_beside_square_board() {
+        let operation = json!({
+            "type":"create-board",
+            "board":{
+                "id":"board-agent-story",
+                "name":"Story-Variante",
+                "activeRevisionId":"revision-story",
+                "document":{
+                    "schemaVersion":1,
+                    "id":"document-story",
+                    "name":"Story-Variante",
+                    "format":{"preset":"instagram-story","width":1080,"height":1920},
+                    "paint":{"kind":"solid","color":"#FFFFFF"},
+                    "rootLayerIds":[],
+                    "layers":{},
+                    "bindings":{},
+                    "tokenRefs":{}
+                },
+                "inputSnapshot":{
+                    "id":"snapshot-story",
+                    "createdAt":"2026-07-12T12:00:00.000Z",
+                    "bindings":{}
+                },
+                "ancestry":{"branchId":"branch-main"},
+                "createdAt":"2026-07-12T12:00:00.000Z"
+            },
+            "placement":{"x":1208,"y":64}
+        });
+        let proposal = json!({
+            "proposalId":"proposal-story","workspaceId":"workspace-1","branchId":"branch-main",
+            "expectedRevisionId":"revision-4","expectedRevisionNumber":4,"state":"frozen",
+            "operations":[operation.clone()],"imageGenerationIntents":[],"receipts":[],
+            "createdAt":"2026-07-12T12:00:00.000Z","updatedAt":"2026-07-12T12:00:01.000Z",
+            "resolved":{
+                "proposalId":"proposal-story","summary":"Story-Artboard neben dem quadratischen Ausgangsboard erstellt.",
+                "batch":{"operationId":"apply-story","expectedRevisionId":"revision-4","expectedRevisionNumber":4,"operations":[operation]},
+                "changes":[{"id":"board:board-agent-story","label":"Story-Variante","kind":"add"}]
+            }
+        });
+
+        validate_proposal(&proposal).unwrap();
+
+        let mut unexpected_board_field = proposal.clone();
+        unexpected_board_field["operations"][0]["board"]["legacy"] = json!(true);
+        unexpected_board_field["resolved"]["batch"]["operations"] =
+            unexpected_board_field["operations"].clone();
+        assert!(validate_proposal(&unexpected_board_field)
+            .unwrap_err()
+            .contains("ungültiges neues Board"));
+
+        let mut board_id_instead_of_board = proposal;
+        board_id_instead_of_board["operations"][0] =
+            json!({"type":"create-board","boardId":"board-agent-story"});
+        board_id_instead_of_board["resolved"]["batch"]["operations"] =
+            board_id_instead_of_board["operations"].clone();
+        assert!(validate_proposal(&board_id_instead_of_board)
+            .unwrap_err()
+            .contains("ungültiges neues Board"));
+    }
+
+    #[test]
+    fn proposal_validator_accepts_exact_whole_board_removal() {
+        let operation = json!({"type":"delete-board","boardId":"board-2"});
+        let proposal = json!({
+            "proposalId":"proposal-remove","workspaceId":"workspace-1","branchId":"branch-main",
+            "expectedRevisionId":"revision-4","expectedRevisionNumber":4,"state":"frozen",
+            "operations":[operation.clone()],"imageGenerationIntents":[],"receipts":[],
+            "createdAt":"2026-07-12T12:00:00.000Z","updatedAt":"2026-07-12T12:00:01.000Z",
+            "resolved":{
+                "proposalId":"proposal-remove","summary":"Artboard entfernen.",
+                "batch":{"operationId":"apply-remove","expectedRevisionId":"revision-4","expectedRevisionNumber":4,"operations":[operation]},
+                "changes":[{"id":"board:board-2","label":"Artboard entfernen","kind":"remove"}]
+            }
+        });
+        validate_proposal(&proposal).unwrap();
+        let mut unknown = proposal;
+        unknown["operations"][0]["force"] = json!(true);
+        unknown["resolved"]["batch"]["operations"] = unknown["operations"].clone();
+        assert!(validate_proposal(&unknown).is_err());
     }
 }

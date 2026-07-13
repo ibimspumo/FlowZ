@@ -21,10 +21,10 @@ describe('React Flow adapters', () => {
     expect(edgeToFlow({ id: 'list', sourceNodeId: 'vc', sourcePortId: 'videos', targetNodeId: 'b', targetPortId: 'videoLists', order: 0 }, [...document.graph.nodes, node]).data?.dataType).toBe('videoList');
     expect(edgeToFlow({ id: 'one', sourceNodeId: 'vc', sourcePortId: 'variant:result', targetNodeId: 'b', targetPortId: 'video', order: 0 }, [...document.graph.nodes, node]).data?.dataType).toBe('video');
   });
-  it('keeps document config and ordered many-handles explicit', () => {
+  it('keeps document config and ordered many-inputs on their real canonical handle', () => {
     expect(nodeToFlow(document.graph.nodes[0]).data.value).toBe('Hallo');
     const flow = edgeToFlow(document.graph.edges[0], document.graph.nodes);
-    expect(flow.targetHandle).toBe('prompt::0');
+    expect(flow.targetHandle).toBe('prompt');
     expect(flowEdgeToGraph(flow, 2)).toMatchObject({ targetPortId: 'prompt', order: 2 });
     expect(nextInputOrder(document, 'b', 'prompt')).toBe(1);
   });

@@ -16,15 +16,15 @@ describe("keyboard port connection mode", () => {
     const nodes = [node("source", "textInput"), node("text", "textGeneration"), node("image", "imageGeneration")];
     const candidates = keyboardPortCandidates({ nodes, edges: [], originNodeId: "source", originPortId: "text", direction: "output", dataType: "text" });
     expect(candidates.map((item) => `${item.nodeId}:${item.portId}`)).toEqual(["image:prompt", "text:prompt"]);
-    expect(candidates[0]?.connection).toMatchObject({ source: "source", sourceHandle: "text", target: "image", targetHandle: "prompt::0" });
+    expect(candidates[0]?.connection).toMatchObject({ source: "source", sourceHandle: "text", target: "image", targetHandle: "prompt" });
     expect(candidates.some((item) => item.portId === "reference")).toBe(false);
   });
 
   it("assigns the next multiple-input slot and omits occupied scalar inputs", () => {
     const nodes = [node("a", "textInput"), node("b", "textInput"), node("generation", "textGeneration"), node("transform", "imageTransform")];
-    const edges = [{ id: "edge", source: "a", sourceHandle: "text", target: "generation", targetHandle: "prompt::0" }] as FlowEdge[];
+    const edges = [{ id: "edge", source: "a", sourceHandle: "text", target: "generation", targetHandle: "prompt" }] as FlowEdge[];
     const multiple = keyboardPortCandidates({ nodes, edges, originNodeId: "b", originPortId: "text", direction: "output", dataType: "text" });
-    expect(multiple.find((item) => item.nodeId === "generation")?.connection.targetHandle).toBe("prompt::1");
+    expect(multiple.find((item) => item.nodeId === "generation")?.connection.targetHandle).toBe("prompt");
 
     const imageNodes = [node("image-a", "imageInput"), node("image-b", "imageInput"), node("transform", "imageTransform")];
     const occupied = [{ id: "image-edge", source: "image-a", sourceHandle: "image", target: "transform", targetHandle: "image" }] as FlowEdge[];

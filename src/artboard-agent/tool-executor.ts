@@ -1,8 +1,11 @@
 import { applyWorkspaceOperations } from "../artboard-workspace/repository";
 import type { ArtboardWorkspaceOperation } from "../artboard-workspace/types";
+import { createArtboardRenderPlan, renderArtboardPreviewPngFromDocument } from "../nodes/brand/artboard-renderer";
+import { mediaUrl } from "../persistence/media";
 import {
   ARTBOARD_FORMATS,
   MAX_ARTBOARD_LAYERS,
+  findBoardPlacement,
   validateArtboardWorkspace,
   type ArtboardBoard,
   type ArtboardLayer,
@@ -63,6 +66,8 @@ function args(invocation: ToolInvocation) { return invocation.arguments; }
 function text(value: unknown) { return String(value); }
 function number(value: unknown) { return value as number; }
 function ids(value: unknown) { return value as string[]; }
+function toolPaint(value:unknown):Extract<ArtboardLayer,{type:"shape"|"container"}>["fill"]{const paint=clone(value) as Extract<ArtboardLayer,{type:"shape"|"container"}>["fill"];if(paint.kind==="solid")paint.color=paint.color.toUpperCase();else paint.stops=paint.stops.map((stop)=>({...stop,color:stop.color.toUpperCase()})) as typeof paint.stops;return paint;}
+function toolStyle(value:unknown):ArtboardLayer["style"]{if(value===undefined)return undefined;const style=clone(value) as NonNullable<ArtboardLayer["style"]>;if(style.border)style.border.color=style.border.color.toUpperCase();if(style.shadow)style.shadow.color=style.shadow.color.toUpperCase();return style;}
 
 function verifyContext(context: RevisionBoundArtboardAgentContext, workspaceId: string, branchId: string) {
   validateArtboardWorkspace(context.workspace);
@@ -70,18 +75,20 @@ function verifyContext(context: RevisionBoundArtboardAgentContext, workspaceId: 
 }
 
 function publicLayer(layer: ArtboardLayer) {
-  const base = { id: layer.id, type: layer.type, name: layer.name, locked: layer.locked, visible: layer.visible, version: layer.version, geometry: clone(layer.geometry) };
-  if (layer.type === "text") return { ...base, text: layer.text.slice(0, 4_000), color: layer.color, fontRef: layer.fontRef, fontSize: layer.fontSize, align: layer.align };
-  if (layer.type === "shape") return { ...base, shape: layer.shape, color: layer.fill.color };
-  if (layer.type === "image") return { ...base, bindingId: layer.bindingId, casHash: layer.casHash, fit: layer.fit };
+  const base = { id: layer.id, type: layer.type, name: layer.name, locked: layer.locked, visible: layer.visible, version: layer.version, geometry: clone(layer.geometry), style:clone(layer.style) };
+  if (layer.type === "text") return { ...base, text: layer.text.slice(0, 4_000), color: layer.color, fontRef: layer.fontRef, fontFamily:layer.fontFamily,fontHash:layer.fontHash,fontWeight:layer.fontWeight,fontStyle:layer.fontStyle,fontAxes:clone(layer.fontAxes), fontSize: layer.fontSize, align: layer.align };
+  if (layer.type === "shape") return { ...base, shape: layer.shape, fill:clone(layer.fill) };
+  if (layer.type === "image") return { ...base, bindingId: layer.bindingId, casHash: layer.casHash, assetVersionId:layer.assetVersionId,fit: layer.fit };
+  if(layer.type==="container")return {...base,childIds:layer.childIds.slice(0,100),layout:clone(layer.layout),fill:clone(layer.fill)};
   return { ...base, childIds: layer.childIds.slice(0, 100) };
 }
 
 function toolLayer(value: Record<string, unknown>, version: number): ArtboardLayer {
-  const base = { id: text(value.id), name: text(value.name), locked: Boolean(value.locked), visible: Boolean(value.visible), version, geometry: clone(value.geometry) as ArtboardLayer["geometry"] };
-  if (value.type === "text") return { ...base, type: "text", text: text(value.text), color: text(value.color).toUpperCase(), fontRef: value.fontRef === undefined ? undefined : text(value.fontRef), fontSize: number(value.fontSize), align: value.align as "left" | "center" | "right" };
-  if (value.type === "shape") return { ...base, type: "shape", shape: value.shape as "rectangle" | "ellipse", fill: { kind: "solid", color: text(value.color).toUpperCase() } };
-  if (value.type === "image") return { ...base, type: "image", bindingId: value.bindingId === undefined ? undefined : text(value.bindingId), casHash: value.casHash === undefined ? undefined : text(value.casHash), fit: value.fit as "cover" | "contain" | "fill" };
+  const base = { id: text(value.id), name: text(value.name), locked: Boolean(value.locked), visible: Boolean(value.visible), version, geometry: clone(value.geometry) as ArtboardLayer["geometry"], style:toolStyle(value.style) };
+  if (value.type === "text") return { ...base, type: "text", text: text(value.text), color: text(value.color).toUpperCase(), fontRef: value.fontRef === undefined ? undefined : text(value.fontRef),fontFamily:value.fontFamily===undefined?undefined:text(value.fontFamily),fontHash:value.fontHash===undefined?undefined:text(value.fontHash),fontWeight:value.fontWeight===undefined?undefined:number(value.fontWeight),fontStyle:value.fontStyle as "normal"|"italic"|undefined,fontAxes:value.fontAxes===undefined?undefined:clone(value.fontAxes) as Record<string,number>, fontSize: number(value.fontSize), align: value.align as "left" | "center" | "right" };
+  if (value.type === "shape") return { ...base, type: "shape", shape: value.shape as "rectangle" | "ellipse", fill: value.fill===undefined?{ kind: "solid", color: text(value.color).toUpperCase() }:toolPaint(value.fill) };
+  if (value.type === "image") return { ...base, type: "image", bindingId: value.bindingId === undefined ? undefined : text(value.bindingId), casHash: value.casHash === undefined ? undefined : text(value.casHash),assetVersionId:value.assetVersionId===undefined?undefined:text(value.assetVersionId), fit: value.fit as "cover" | "contain" | "fill" };
+  if(value.type==="container")return {...base,type:"container",childIds:ids(value.childIds),layout:clone(value.layout) as Extract<ArtboardLayer,{type:"container"}>["layout"],fill:toolPaint(value.fill)};
   return { ...base, type: "group", childIds: ids(value.childIds) };
 }
 
@@ -92,7 +99,7 @@ function boardOrThrow(workspace: ArtboardWorkspace, boardId: string): ArtboardBo
 }
 
 function parentOf(board: ArtboardBoard, layerId: string) {
-  return Object.values(board.document.layers).find((layer): layer is Extract<ArtboardLayer, { type: "group" }> => layer.type === "group" && layer.childIds.includes(layerId));
+  return Object.values(board.document.layers).find((layer): layer is Extract<ArtboardLayer, { type: "group"|"container" }> => (layer.type === "group"||layer.type==="container") && layer.childIds.includes(layerId));
 }
 
 function validateCandidate(workspace: ArtboardWorkspace, operations: ArtboardWorkspaceOperation[]) {
@@ -101,16 +108,40 @@ function validateCandidate(workspace: ArtboardWorkspace, operations: ArtboardWor
   return candidate;
 }
 
-function mutationOperations(invocation: ToolInvocation, workspace: ArtboardWorkspace): { operations: ArtboardWorkspaceOperation[]; intent?: ArtboardImageGenerationIntent; result: Record<string, unknown> } {
-  const value = args(invocation); const boardId = text(value.boardId); const board = boardOrThrow(workspace, boardId);
+function assertFontReferencesExist(workspace: ArtboardWorkspace, layers: readonly ArtboardLayer[]) {
+  const knownHashes = new Set(Object.values(workspace.boards).flatMap((board) => Object.values(board.document.layers)
+    .flatMap((layer) => layer.type === "text" && layer.fontHash ? [layer.fontHash] : [])));
+  for (const layer of layers) if (layer.type === "text" && layer.fontHash && !knownHashes.has(layer.fontHash)) {
+    throw new Error("fontHash verweist auf keinen bereits geladenen Workspace-Font. Für Systemschriften nur fontFamily ohne fontHash senden.");
+  }
+}
+
+function mutationOperations(invocation: ToolInvocation, workspace: ArtboardWorkspace, createdAt:string): { operations: ArtboardWorkspaceOperation[]; intent?: ArtboardImageGenerationIntent; result: Record<string, unknown> } {
+  const value = args(invocation);
+  if(invocation.tool==="create_board"||invocation.tool==="duplicate_board_as_variant"){
+    const width=number(value.width),height=number(value.height);const preset=(Object.entries(ARTBOARD_FORMATS) as [ArtboardPreset,{width:number;height:number}][]).find(([,format])=>format.width===width&&format.height===height)?.[0];if(!preset)throw new Error("Die Board-Abmessungen entsprechen keinem unterstützten Format.");
+    const sourceId=invocation.tool==="duplicate_board_as_variant"?text(value.sourceBoardId):value.sourceBoardId===undefined?workspace.activeBoardId:text(value.sourceBoardId);const source=boardOrThrow(workspace,sourceId);const suffix=shortHash(`${text(value.proposalId)}:${text(value.operationId)}`);const boardId=`board-agent-${suffix}`;if(workspace.boards[boardId])throw new Error("Die deterministische Board-ID ist bereits belegt.");
+    const format={preset,width,height};const duplicate=invocation.tool==="duplicate_board_as_variant";const layers=duplicate?clone(source.document.layers):{};
+    for(const layer of Object.values(layers)){layer.geometry.width=Math.min(layer.geometry.width,width);layer.geometry.height=Math.min(layer.geometry.height,height);layer.geometry.x=Math.max(0,Math.min(layer.geometry.x,width-layer.geometry.width));layer.geometry.y=Math.max(0,Math.min(layer.geometry.y,height-layer.geometry.height));}
+    const board:ArtboardBoard={id:boardId,name:text(value.name),activeRevisionId:`revision-${suffix}`,document:{schemaVersion:1,id:`document-${suffix}`,name:text(value.name),format,paint:duplicate?clone(source.document.paint):{kind:"solid",color:"#FFFFFF"},rootLayerIds:duplicate?clone(source.document.rootLayerIds):[],layers,bindings:duplicate?clone(source.document.bindings):{},tokenRefs:duplicate?clone(source.document.tokenRefs):{}},inputSnapshot:duplicate?{...clone(source.inputSnapshot),id:`snapshot-${suffix}`,createdAt}: {id:`snapshot-${suffix}`,createdAt,bindings:{}},ancestry:{branchId:source.ancestry.branchId,parentBoardId:duplicate?source.id:undefined,sourceRevisionId:duplicate?source.activeRevisionId:undefined},createdAt};
+    const placement=findBoardPlacement(workspace,format,source.id);return {operations:[{type:"create-board",board,placement}],result:{boardId,sourceBoardId:source.id,format,placement,kind:duplicate?"variant":"board"}};
+  }
+  if (invocation.tool === "delete_board") {
+    const boardId = text(value.boardId);
+    const board = boardOrThrow(workspace, boardId);
+    if (Object.keys(workspace.boards).length <= 1) throw new Error("Das letzte Artboard kann nicht entfernt werden.");
+    return { operations: [{ type: "delete-board", boardId }], result: { boardId, boardName: board.name, status: "awaiting-explicit-apply" } };
+  }
+  const boardId = text(value.boardId); const board = boardOrThrow(workspace, boardId);
   if (invocation.tool === "create_layers") {
     const raw = value.layers as Record<string, unknown>[];
     if (Object.keys(board.document.layers).length + raw.length > MAX_ARTBOARD_LAYERS) throw new Error(`Das Board darf höchstens ${MAX_ARTBOARD_LAYERS} Ebenen enthalten.`);
     const existing = new Set(Object.keys(board.document.layers)); const incoming = new Set(raw.map((layer) => text(layer.id)));
     if (incoming.size !== raw.length || [...incoming].some((id) => existing.has(id))) throw new Error("Neue Ebenen brauchen eindeutige, noch unbenutzte IDs.");
     const layers = raw.map((layer) => toolLayer(layer, 1));
-    for (const layer of layers) if (layer.type === "group" && layer.childIds.some((id) => !existing.has(id) && !incoming.has(id))) throw new Error(`Gruppe ${layer.id} verweist auf eine unbekannte Ebene.`);
-    const childIds = new Set(layers.flatMap((layer) => layer.type === "group" ? layer.childIds : []));
+    assertFontReferencesExist(workspace, layers);
+    for (const layer of layers) if ((layer.type === "group"||layer.type==="container") && layer.childIds.some((id) => !existing.has(id) && !incoming.has(id))) throw new Error(`Container ${layer.id} verweist auf eine unbekannte Ebene.`);
+    const childIds = new Set(layers.flatMap((layer) => layer.type === "group"||layer.type==="container" ? layer.childIds : []));
     for (const childId of childIds) if (parentOf(board, childId)) throw new Error(`Ebene ${childId} besitzt bereits eine Gruppe als Elternteil.`);
     const nextLayers = clone(board.document.layers); layers.forEach((layer) => { nextLayers[layer.id] = layer; });
     const roots = [...board.document.rootLayerIds.filter((id) => !childIds.has(id)), ...layers.filter((layer) => !childIds.has(layer.id)).map((layer) => layer.id)];
@@ -122,6 +153,14 @@ function mutationOperations(invocation: ToolInvocation, workspace: ArtboardWorks
     const operations = raw.map((item): ArtboardWorkspaceOperation => {
       const current = board.document.layers[text(item.id)]; if (!current) throw new Error(`Ebene ${text(item.id)} existiert nicht.`);
       const layer = toolLayer(item, current.version + 1); if (layer.type !== current.type) throw new Error(`Der Typ der Ebene ${current.id} darf nicht geändert werden.`);
+      if(layer.type==="text"&&current.type==="text"){
+        const explicitFamily = typeof item.fontFamily === "string";
+        if (!explicitFamily) { layer.fontRef??=current.fontRef;layer.fontFamily??=current.fontFamily;layer.fontHash??=current.fontHash;layer.fontWeight??=current.fontWeight;layer.fontStyle??=current.fontStyle;layer.fontAxes??=clone(current.fontAxes); }
+        else if (!layer.fontHash) { delete layer.fontRef; delete layer.fontHash; delete layer.fontAxes; }
+        assertFontReferencesExist(workspace, [layer]);
+      }
+      if(layer.type==="image"&&current.type==="image"&&layer.casHash===current.casHash)layer.assetVersionId??=current.assetVersionId;
+      layer.style??=clone(current.style);
       return { type: "update-layer", boardId, layerId: layer.id, patch: layer };
     });
     return { operations, result: { updatedLayerIds: raw.map((item) => text(item.id)) } };
@@ -129,10 +168,10 @@ function mutationOperations(invocation: ToolInvocation, workspace: ArtboardWorks
   if (invocation.tool === "delete_layers") {
     const requested = ids(value.layerIds); const deleting = new Set(requested);
     for (const id of requested) if (!board.document.layers[id]) throw new Error(`Ebene ${id} existiert nicht.`);
-    const collect = (id: string) => { const layer = board.document.layers[id]; deleting.add(id); if (layer?.type === "group") layer.childIds.forEach(collect); };
+    const collect = (id: string) => { const layer = board.document.layers[id]; deleting.add(id); if (layer?.type === "group"||layer?.type==="container") layer.childIds.forEach(collect); };
     requested.forEach(collect);
     const operations: ArtboardWorkspaceOperation[] = [];
-    for (const layer of Object.values(board.document.layers)) if (layer.type === "group" && !deleting.has(layer.id) && layer.childIds.some((id) => deleting.has(id))) operations.push({ type: "update-layer", boardId, layerId: layer.id, patch: { childIds: layer.childIds.filter((id) => !deleting.has(id)), version: layer.version + 1 } });
+    for (const layer of Object.values(board.document.layers)) if ((layer.type === "group"||layer.type==="container") && !deleting.has(layer.id) && layer.childIds.some((id) => deleting.has(id))) operations.push({ type: "update-layer", boardId, layerId: layer.id, patch: { childIds: layer.childIds.filter((id) => !deleting.has(id)), version: layer.version + 1 } });
     operations.push({ type: "delete-layers", boardId, layerIds: [...deleting] });
     return { operations, result: { deletedLayerIds: [...deleting] } };
   }
@@ -141,17 +180,17 @@ function mutationOperations(invocation: ToolInvocation, workspace: ArtboardWorks
     for (const id of requested) { const layer = board.document.layers[id]; if (!layer) throw new Error(`Ebene ${id} existiert nicht.`); if (parentOf(board, id)) throw new Error("Verschachtelte Ebenen können nur über ihre Root-Gruppe dupliziert werden."); }
     const nextLayers = clone(board.document.layers); const nextRoots = [...board.document.rootLayerIds]; const duplicateIds: string[] = [];
     for (const sourceId of requested) {
-      const remap = new Map<string, string>(); const collect = (id: string) => { const layer = board.document.layers[id]; remap.set(id, `${id.slice(0, 88)}-copy-${shortHash(`${text(value.operationId)}:${id}`)}`); if (layer.type === "group") layer.childIds.forEach(collect); }; collect(sourceId);
+      const remap = new Map<string, string>(); const collect = (id: string) => { const layer = board.document.layers[id]; remap.set(id, `${id.slice(0, 88)}-copy-${shortHash(`${text(value.operationId)}:${id}`)}`); if (layer.type === "group"||layer.type==="container") layer.childIds.forEach(collect); }; collect(sourceId);
       for (const generated of remap.values()) if (nextLayers[generated]) throw new Error("Die deterministische Duplikat-ID kollidiert mit einer vorhandenen Ebene.");
-      for (const [oldId, newId] of remap) { const source = board.document.layers[oldId]; const layer = clone(source); layer.id = newId; layer.name = oldId === sourceId ? `${source.name} Kopie` : source.name; layer.version = 1; if (layer.type === "group") layer.childIds = layer.childIds.map((id) => remap.get(id)!); layer.geometry.x = Math.min(board.document.format.width - layer.geometry.width, layer.geometry.x + 24); layer.geometry.y = Math.min(board.document.format.height - layer.geometry.height, layer.geometry.y + 24); nextLayers[newId] = layer; }
+      for (const [oldId, newId] of remap) { const source = board.document.layers[oldId]; const layer = clone(source); layer.id = newId; layer.name = oldId === sourceId ? `${source.name} Kopie` : source.name; layer.version = 1; if (layer.type === "group"||layer.type==="container") layer.childIds = layer.childIds.map((id) => remap.get(id)!); layer.geometry.x = Math.min(board.document.format.width - layer.geometry.width, layer.geometry.x + 24); layer.geometry.y = Math.min(board.document.format.height - layer.geometry.height, layer.geometry.y + 24); nextLayers[newId] = layer; }
       const id = remap.get(sourceId)!; const rootIndex = nextRoots.indexOf(sourceId) + 1; nextRoots.splice(rootIndex, 0, id); duplicateIds.push(id);
     }
     return { operations: [{ type: "set-layer-tree", boardId, layers: nextLayers, rootLayerIds: nextRoots }], result: { duplicatedLayerIds: duplicateIds } };
   }
   if (invocation.tool === "reorder_layers") {
-    const requested = ids(value.layerIds); if (requested.some((id) => !board.document.rootLayerIds.includes(id))) throw new Error("Nur Root-Ebenen können mit diesem Werkzeug neu angeordnet werden.");
-    const positions = requested.map((id) => board.document.rootLayerIds.indexOf(id)).sort((a, b) => a - b); const desired = [...board.document.rootLayerIds]; positions.forEach((position, index) => { desired[position] = requested[index]; });
-    const operations: ArtboardWorkspaceOperation[] = []; const current = [...board.document.rootLayerIds];
+    const requested = ids(value.layerIds);const parent=parentOf(board,requested[0]);const siblings=parent?parent.childIds:board.document.rootLayerIds;if(requested.some((id)=>!siblings.includes(id)||parentOf(board,id)?.id!==parent?.id))throw new Error("Neu angeordnete Ebenen müssen dieselbe Eltern-Ebene besitzen.");
+    const positions = requested.map((id) => siblings.indexOf(id)).sort((a, b) => a - b); const desired = [...siblings]; positions.forEach((position, index) => { desired[position] = requested[index]; });
+    const operations: ArtboardWorkspaceOperation[] = []; const current = [...siblings];
     for (let index = 0; index < desired.length; index += 1) { const wanted = desired[index]; while (current.indexOf(wanted) > index) { operations.push({ type: "reorder-layer", boardId, layerId: wanted, direction: "backward" }); const old = current.indexOf(wanted); current.splice(old, 1); current.splice(old - 1, 0, wanted); } }
     return { operations, result: { rootLayerIds: desired } };
   }
@@ -189,7 +228,7 @@ function describeChanges(before: ArtboardWorkspace, after: ArtboardWorkspace, in
     if (oldBoard && !nextBoard) { changes.push({ id: `board:${boardId}`, label: `Board „${oldBoard.name}“ entfernen`, kind: "remove", boardName }); continue; }
     if (!oldBoard || !nextBoard) continue;
     if (oldBoard.name !== nextBoard.name) changes.push({ id: `board-name:${boardId}`, label: "Board umbenennen", kind: "change", boardName, before: oldBoard.name, after: nextBoard.name });
-    if (oldBoard.document.paint.color !== nextBoard.document.paint.color) changes.push({ id: `board-paint:${boardId}`, label: "Hintergrund ändern", kind: "change", boardName, before: oldBoard.document.paint.color, after: nextBoard.document.paint.color });
+    if (canonical(oldBoard.document.paint) !== canonical(nextBoard.document.paint)) changes.push({ id: `board-paint:${boardId}`, label: "Hintergrund ändern", kind: "change", boardName, before: canonical(oldBoard.document.paint), after: canonical(nextBoard.document.paint) });
     for (const layerId of new Set([...Object.keys(oldBoard.document.layers), ...Object.keys(nextBoard.document.layers)])) {
       const oldLayer = oldBoard.document.layers[layerId]; const nextLayer = nextBoard.document.layers[layerId];
       if (!oldLayer && nextLayer) changes.push({ id: `layer:${boardId}:${layerId}`, label: `Ebene „${nextLayer.name}“ hinzufügen`, kind: "add", boardName });
@@ -207,6 +246,9 @@ function summary(changes: readonly ProposalDiffItem[]) {
   return `${changes.length} Änderung${changes.length === 1 ? "" : "en"}: ${counts.add} neu, ${counts.change} angepasst, ${counts.remove} entfernt.`;
 }
 
+type VisualReviewEvidence = { kind: "visual-review"; boardId: string; operationCount: number; mutationReceiptCount: number; width: number; height: number; reviewedAt: string };
+function visualReview(value: unknown): value is VisualReviewEvidence { return Boolean(value && typeof value === "object" && (value as { kind?: unknown }).kind === "visual-review"); }
+
 export class PersistentArtboardAgentToolExecutor implements ArtboardAgentToolExecutor {
   private queues = new Map<string, Promise<unknown>>();
   constructor(private readonly contextProvider: ArtboardAgentContextProvider, private readonly proposals: ArtboardProposalRepository, private readonly now = () => new Date()) {}
@@ -218,7 +260,10 @@ export class PersistentArtboardAgentToolExecutor implements ArtboardAgentToolExe
 
   async execute(invocation: ToolInvocation): Promise<AgentToolResult> {
     const checked = validateToolInvocation(invocation, { calls: 0, mutations: 0 }).invocation;
-    if ((ARTBOARD_READ_TOOLS as readonly string[]).includes(checked.tool)) return this.read(checked);
+    if ((ARTBOARD_READ_TOOLS as readonly string[]).includes(checked.tool)) {
+      const proposalId = checked.tool === "render_preview" && typeof args(checked).proposalId === "string" ? text(args(checked).proposalId) : undefined;
+      return proposalId ? this.serialized(proposalId, () => this.read(checked)) : this.read(checked);
+    }
     const proposalId = text(args(checked).proposalId);
     return this.serialized(proposalId, () => this.write(checked));
   }
@@ -231,16 +276,35 @@ export class PersistentArtboardAgentToolExecutor implements ArtboardAgentToolExe
   }
 
   private async read(invocation: ToolInvocation): Promise<AgentToolResult> {
-    const context = await this.context(invocation); const value = args(invocation); const workspace = context.workspace;
+    const context = await this.context(invocation); const value = args(invocation); let workspace = context.workspace;
     if (invocation.tool === "get_workspace_info") return { content: { workspaceId: workspace.id, name: workspace.name, revision: context.revision, boards: Object.values(workspace.boards).slice(0, 64).map((board) => ({ id: board.id, name: board.name, revisionId: board.activeRevisionId, format: board.document.format, layerCount: Object.keys(board.document.layers).length, placement: workspace.placements[board.id] })) } };
     if (invocation.tool === "get_selection") return { content: clone(context.selection) };
-    if (invocation.tool === "get_board") { const board = boardOrThrow(workspace, text(value.boardId)); return { content: { id: board.id, name: board.name, revisionId: board.activeRevisionId, format: board.document.format, backgroundColor: board.document.paint.color, rootLayerIds: board.document.rootLayerIds.slice(0, MAX_READ_LAYERS), layerCount: Object.keys(board.document.layers).length, bindingIds: Object.keys(board.document.bindings).slice(0, MAX_READ_LAYERS) } }; }
-    if (invocation.tool === "get_layer_tree") { const board = boardOrThrow(workspace, text(value.boardId)); const node = (id: string, depth: number): unknown => { const layer = board.document.layers[id]; return { id, type: layer.type, name: layer.name, visible: layer.visible, locked: layer.locked, ...(layer.type === "group" && depth < 6 ? { children: layer.childIds.slice(0, MAX_READ_LAYERS).map((child) => node(child, depth + 1)) } : {}) }; }; return { content: { boardId: board.id, roots: board.document.rootLayerIds.slice(0, MAX_READ_LAYERS).map((id) => node(id, 1)) } }; }
+    if (invocation.tool === "get_board") { const board = boardOrThrow(workspace, text(value.boardId)); return { content: { id: board.id, name: board.name, revisionId: board.activeRevisionId, format: board.document.format, background:clone(board.document.paint), rootLayerIds: board.document.rootLayerIds.slice(0, MAX_READ_LAYERS), layerCount: Object.keys(board.document.layers).length, bindingIds: Object.keys(board.document.bindings).slice(0, MAX_READ_LAYERS) } }; }
+    if (invocation.tool === "get_layer_tree") { const board = boardOrThrow(workspace, text(value.boardId)); const node = (id: string, depth: number): unknown => { const layer = board.document.layers[id]; return { id, type: layer.type, name: layer.name, visible: layer.visible, locked: layer.locked, ...((layer.type === "group"||layer.type==="container") && depth < 6 ? { children: layer.childIds.slice(0, MAX_READ_LAYERS).map((child) => node(child, depth + 1)) } : {}) }; }; return { content: { boardId: board.id, roots: board.document.rootLayerIds.slice(0, MAX_READ_LAYERS).map((id) => node(id, 1)) } }; }
     if (invocation.tool === "get_layers") { const wanted = ids(value.layerIds); const found: unknown[] = []; for (const board of Object.values(workspace.boards)) for (const id of wanted) if (board.document.layers[id]) found.push({ boardId: board.id, ...publicLayer(board.document.layers[id]) }); if (found.length !== wanted.length) throw new Error("Mindestens eine angeforderte Ebene fehlt oder ihre ID ist nicht workspaceweit eindeutig."); return { content: { layers: found } }; }
     if (invocation.tool === "get_bound_inputs") { const wanted = ids(value.bindingIds); const found: unknown[] = []; for (const board of Object.values(workspace.boards)) for (const id of wanted) { const binding = board.document.bindings[id]; if (binding) found.push({ boardId: board.id, ...clone(binding) }); } if (found.length !== wanted.length) throw new Error("Mindestens ein angefordertes Binding fehlt oder ist nicht eindeutig."); return { content: { bindings: found } }; }
-    const board = boardOrThrow(workspace, text(value.boardId)); const scaleX = number(value.width) / board.document.format.width; const scaleY = number(value.height) / board.document.format.height;
-    const previewItems: Record<string, unknown>[] = []; const visit = (id: string) => { const layer = board.document.layers[id]; if (layer.type === "group") { layer.childIds.forEach(visit); return; } previewItems.push({ id: layer.id, type: layer.type, name: layer.name, x: Math.round(layer.geometry.x * scaleX), y: Math.round(layer.geometry.y * scaleY), width: Math.round(layer.geometry.width * scaleX), height: Math.round(layer.geometry.height * scaleY), rotation: layer.geometry.rotation, color: layer.type === "text" ? layer.color : layer.type === "shape" ? layer.fill.color : undefined }); }; board.document.rootLayerIds.forEach(visit);
-    return { content: { kind: "structured-artboard-preview", boardId: board.id, width: number(value.width), height: number(value.height), backgroundColor: board.document.paint.color, items: previewItems.slice(0, MAX_PREVIEW_ITEMS), truncated: previewItems.length > MAX_PREVIEW_ITEMS } };
+    let previewDraft: PersistedArtboardProposal | undefined;
+    if (value.proposalId !== undefined) {
+      const draft = await this.proposals.findProposal(text(value.proposalId));
+      if (!draft) throw new Error("Der angeforderte Proposal-Entwurf wurde nicht gefunden.");
+      validatePersistedArtboardProposal(draft);
+      if (draft.workspaceId !== context.workspace.id || draft.branchId !== context.branchId || draft.expectedRevisionId !== context.revision.id || draft.expectedRevisionNumber !== context.revision.number) throw new Error("Die Vorschau gehört nicht zur aktuellen gebundenen Proposal-Revision.");
+      workspace = validateCandidate(context.workspace, draft.operations);
+      previewDraft = draft;
+    }
+    const previewBoardId = text(value.boardId);
+    const removalPreview = Boolean(previewDraft && !workspace.boards[previewBoardId] && previewDraft.operations.some((operation) => operation.type === "delete-board" && operation.boardId === previewBoardId));
+    const board = removalPreview ? boardOrThrow(context.workspace, previewBoardId) : boardOrThrow(workspace, previewBoardId);const viewportWidth=number(value.width),viewportHeight=number(value.height);const scale=Math.min(viewportWidth/board.document.format.width,viewportHeight/board.document.format.height);const offsetX=(viewportWidth-board.document.format.width*scale)/2,offsetY=(viewportHeight-board.document.format.height*scale)/2;const plan=createArtboardRenderPlan(board.document);
+    const previewItems=plan.layers.map((layer)=>({id:layer.id,type:layer.type,name:layer.name,x:Math.round(offsetX+layer.geometry.x*scale),y:Math.round(offsetY+layer.geometry.y*scale),width:Math.round(layer.geometry.width*scale),height:Math.round(layer.geometry.height*scale),rotation:layer.geometry.rotation,zIndex:layer.zIndex,paint:layer.type==="shape"||layer.type==="container"?clone(layer.fill):undefined,color:layer.type==="text"?layer.color:undefined,style:clone(layer.style),layout:layer.type==="container"?clone(layer.layout):undefined}));
+    const imageDataUrl = typeof window === "undefined" ? undefined : await renderArtboardPreviewPngFromDocument(board.document, mediaUrl, number(value.width), number(value.height));
+    if (previewDraft) {
+      if (previewDraft.state !== "draft" || previewDraft.operations.length < 1) throw new Error("Nur ein aktiver Proposal-Entwurf mit Änderungen kann visuell geprüft werden.");
+      if (previewDraft.receipts.length >= 96) throw new Error("Das Belegbudget dieses Artboard-Vorschlags ist ausgeschöpft.");
+      const mutationReceiptCount = previewDraft.receipts.filter((receipt) => !visualReview(receipt.result)).length;
+      const reviewedAt = this.now().toISOString(); const evidence: VisualReviewEvidence = { kind: "visual-review", boardId: board.id, operationCount: previewDraft.operations.length, mutationReceiptCount, width: viewportWidth, height: viewportHeight, reviewedAt };
+      previewDraft.receipts.push({ operationId: `visual-preview-${shortHash(`${previewDraft.proposalId}:${previewDraft.receipts.length}:${board.id}`)}`, payloadFingerprint: canonical({ tool: invocation.tool, arguments: value }), result: evidence }); previewDraft.updatedAt = reviewedAt; await this.proposals.saveProposal(previewDraft);
+    }
+    return { content: { kind: "structured-artboard-preview", renderer:"canonical-v2", boardId: board.id, proposalId: value.proposalId, removalPreview, width:viewportWidth, height:viewportHeight, contentBounds:{x:Math.round(offsetX),y:Math.round(offsetY),width:Math.round(board.document.format.width*scale),height:Math.round(board.document.format.height*scale)}, background:clone(board.document.paint), items: previewItems.slice(0, MAX_PREVIEW_ITEMS), truncated: previewItems.length > MAX_PREVIEW_ITEMS }, imageDataUrl };
   }
 
   private async write(invocation: ToolInvocation): Promise<AgentToolResult> {
@@ -259,10 +323,13 @@ export class PersistentArtboardAgentToolExecutor implements ArtboardAgentToolExe
     const before = context.workspace; const current = validateCandidate(before, draft.operations);
     let result: unknown;
     if (invocation.tool === "finish_working") {
+      const reviews = draft.receipts.map((receipt) => receipt.result).filter(visualReview); const changedBoards = new Set(draft.operations.map((operation) => operation.type === "create-board" ? operation.board.id : "boardId" in operation ? operation.boardId : undefined).filter((id): id is string => Boolean(id)));
+      if (!draft.operations.length || [...changedBoards].some((boardId) => !reviews.some((review) => review.boardId === boardId && review.operationCount === draft.operations.length))) throw new Error("Jedes geänderte Board muss nach der letzten Proposal-Operation mit render_preview visuell geprüft werden.");
+      const firstReview = reviews[0]; const mutationReceiptCount = draft.receipts.filter((receipt) => !visualReview(receipt.result)).length; if (!firstReview || mutationReceiptCount - firstReview.mutationReceiptCount > 1) throw new Error("Nach der ersten visuellen Prüfung ist höchstens eine gezielte Korrekturoperation erlaubt.");
       const changes = describeChanges(before, current, draft.imageGenerationIntents); const resolved: ResolvedArtboardProposal = { proposalId, summary: summary(changes), batch: { operationId: `agent-${proposalId.slice(0, 90)}-${shortHash(proposalId)}`, expectedRevisionId: draft.expectedRevisionId, expectedRevisionNumber: draft.expectedRevisionNumber, operations: clone(draft.operations) }, changes, ...(draft.imageGenerationIntents.length ? { warnings: ["Bildgenerierungen werden nicht automatisch gestartet und benötigen eine separate Kostenbestätigung."], followUpIntents: clone(draft.imageGenerationIntents) } : {}) };
       draft.state = "frozen"; draft.resolved = resolved; result = { frozen: true, summary: resolved.summary, changeCount: changes.length, paidFollowUpCount: draft.imageGenerationIntents.length };
     } else {
-      const mutation = mutationOperations(invocation, current); validateCandidate(current, mutation.operations); draft.operations.push(...clone(mutation.operations)); if (mutation.intent) draft.imageGenerationIntents.push(clone(mutation.intent)); result = mutation.result;
+      const mutation = mutationOperations(invocation, current, draft.createdAt); validateCandidate(current, mutation.operations); draft.operations.push(...clone(mutation.operations)); if (mutation.intent) draft.imageGenerationIntents.push(clone(mutation.intent)); result = mutation.result;
     }
     if (draft.operations.length > 80 || draft.imageGenerationIntents.length > 24 || draft.receipts.length >= 96) throw new Error("Das Gesamtbudget dieses Artboard-Vorschlags ist ausgeschöpft.");
     draft.receipts.push({ operationId, payloadFingerprint: fingerprint, result: clone(result) }); draft.updatedAt = this.now().toISOString(); await this.proposals.saveProposal(draft);

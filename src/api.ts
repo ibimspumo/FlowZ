@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { AiResult, ModelOption } from './types';
+import { getTextAiSystemInstruction } from './preferences/text-ai';
 
 const isTauri = () => '__TAURI_INTERNALS__' in window;
 
@@ -195,12 +196,12 @@ export async function cancelTranscriptionRun(runId: string): Promise<boolean> {
 
 export async function runChat(model: string, prompt: string, images: string[] = [], outputMode: 'free' | 'single' = 'free') {
   if (!isTauri()) desktopOnly();
-  return invoke<AiResult>('run_chat', { request: { model, prompt, images, outputMode } });
+  return invoke<AiResult>('run_chat', { request: { model, prompt, images, outputMode, systemInstruction:getTextAiSystemInstruction() } });
 }
 
 export async function runStructuredChat(model: string, prompt: string, schemaName: string, schema: Record<string, unknown>) {
   if (!isTauri()) desktopOnly();
-  return invoke<AiResult>('run_chat', { request: { model, prompt, images: [], outputMode: 'structured', schemaName, schema } });
+  return invoke<AiResult>('run_chat', { request: { model, prompt, images: [], outputMode: 'structured', schemaName, schema, systemInstruction:getTextAiSystemInstruction() } });
 }
 export async function storePaidBrandResult(request:{runId:string;projectId:string;nodeId:string;model:string;kind:string;text:string;costMicrounits?:number;parameters:Record<string,unknown>}){
   if(!isTauri())desktopOnly();return invoke<{resultId:string;persisted:boolean;outboxed:boolean;targetCurrent:boolean;persistenceError?:string}>('store_paid_brand_result',{request});

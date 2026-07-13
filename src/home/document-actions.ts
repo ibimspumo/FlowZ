@@ -13,11 +13,11 @@ export function catalogRecordToDocument(record: DocumentCatalogRecord): Document
   const createdAt = validTimestamp(record.createdAt) ?? updatedAt;
   const revision = record.revision && record.revision > 0 ? record.revision : 1;
   const fallbackName = record.kind === "flow" ? "Unbenannter Flow" : "Unbenanntes Artboard";
-  const fingerprint = record.fingerprint ?? `${record.kind}:${record.id}:${revision}:${updatedAt}`;
+  const fingerprint = record.coverFingerprint ?? record.fingerprint ?? `${record.kind}:${record.id}:${revision}:${updatedAt}`;
   const cover = record.cover && /^[a-f0-9]{64}$/.test(record.cover.blobHash)
     && record.cover.contentFingerprint === fingerprint && Number.isInteger(record.cover.width) && record.cover.width > 0 && record.cover.width <= 512
     && Number.isInteger(record.cover.height) && record.cover.height > 0 && record.cover.height <= 512
-    && (record.cover.mediaType === "image/png" || record.cover.mediaType === "image/svg+xml")
+    && record.cover.mediaType === "image/png"
     && Number.isFinite(Date.parse(record.cover.generatedAt)) ? record.cover : undefined;
   return {
     id: record.id, kind: record.kind, schemaVersion: 1,

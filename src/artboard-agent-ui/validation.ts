@@ -5,7 +5,7 @@ import type { ArtboardAgentContext, ResolvedArtboardProposal } from "./types";
 
 const operationTypes = new Set<ArtboardWorkspaceOperation["type"]>([
   "rename-workspace", "rename-board", "set-board-format", "set-board-paint", "move-board",
-  "update-layer", "create-layer", "set-layer-tree", "delete-layers", "reorder-layer", "create-board", "set-board-inputs",
+  "update-layer", "create-layer", "set-layer-tree", "delete-layers", "reorder-layer", "create-board", "delete-board", "set-board-inputs",
 ]);
 
 export function proposalRevisionError(proposal: ResolvedArtboardProposal, context: ArtboardAgentContext): string | undefined {
@@ -35,6 +35,7 @@ export function validateResolvedProposal(value: ResolvedArtboardProposal, contex
   if (revisionError) throw new Error(revisionError);
 
   const createdBoards = new Set<string>();
+  const deletedBoards = new Set<string>();
   for (const operation of batch.operations as unknown[]) {
     if (!operation || typeof operation !== "object" || !("type" in operation) || typeof operation.type !== "string" || !operationTypes.has(operation.type as ArtboardWorkspaceOperation["type"])) {
       throw new Error("Der Vorschlag enthält eine unbekannte Artboard-Operation.");
@@ -45,6 +46,13 @@ export function validateResolvedProposal(value: ResolvedArtboardProposal, contex
       createdBoards.add(candidate.board.id);
       continue;
     }
+    if (candidate.type === "delete-board") {
+      if (deletedBoards.has(candidate.boardId)) throw new Error("Ein Artboard kann in einem Vorschlag nur einmal entfernt werden.");
+      if (!context.workspace.boards[candidate.boardId] && !createdBoards.has(candidate.boardId)) throw new Error("Der Vorschlag entfernt ein nicht vorhandenes Artboard.");
+      deletedBoards.add(candidate.boardId);
+      continue;
+    }
+    if ("boardId" in candidate && deletedBoards.has(candidate.boardId)) throw new Error("Der Vorschlag ändert ein bereits entferntes Artboard.");
     if ("boardId" in candidate && !context.workspace.boards[candidate.boardId] && !createdBoards.has(candidate.boardId)) {
       throw new Error("Der Vorschlag verweist auf ein nicht vorhandenes Artboard.");
     }

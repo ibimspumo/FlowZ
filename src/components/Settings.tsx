@@ -4,6 +4,7 @@ import { braveKeyStatus, clearFalUploadCache, deleteBrandFontCache, deleteBraveK
 import { AppUpdater } from './AppUpdater';
 import { formatFileSize, localizeErrorMessage, useI18n } from '../i18n';
 import { CustomSelect } from './CustomSelect';
+import { getTextAiSystemInstruction, setTextAiSystemInstruction } from '../preferences/text-ai';
 
 export function Settings({ open, onClose }: { open: boolean; onClose: () => void }) {
   const {locale,setLocale,t}=useI18n();
@@ -13,6 +14,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
   const [falKey, setFalKey] = useState(''); const [falSaved, setFalSaved] = useState(false); const [falBusy, setFalBusy] = useState(false);
   const [falCache, setFalCache] = useState<{ entries: number; nextExpiry?: string }>({ entries: 0 });
   const [fontCache,setFontCache]=useState<FontCacheEntry[]>([]);
+  const [textInstruction,setTextInstruction]=useState(()=>getTextAiSystemInstruction());
   useEffect(() => { if (open) { ref.current?.showModal(); void Promise.all([keyStatus().then(setSaved), braveKeyStatus().then(setBraveSaved), falKeyStatus().then(setFalSaved), falUploadCacheStatus().then(setFalCache),listBrandFontCache().then(setFontCache)]); } else ref.current?.close(); }, [open]);
   async function store() { setBusy(true); setError(''); try { await saveKey(key); setSaved(true); setKey(''); } catch (e) { setError(String(e)); } finally { setBusy(false); } }
   async function remove() { try { await deleteKey(); setSaved(false); } catch (e) { setError(String(e)); } }
@@ -24,6 +26,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
   return <dialog ref={ref} className="settings-dialog" aria-labelledby="settings-dialog-title" onClose={onClose} onCancel={onClose}>
     <div className="dialog-heading"><div><KeyRound size={20} /><div><h2 id="settings-dialog-title">{t('settings.title')}</h2><p>{t('settings.subtitle')}</p></div></div><button className="icon-button" onClick={onClose} aria-label={t('settings.close')}><X size={17} /></button></div>
     <section className="provider-key-section"><header><strong>{t('settings.interface')}</strong><span>{t('language.hint')}</span></header><label className="field-label">{t('language.label')}<CustomSelect label={t('language.label')} value={locale} options={[{value:'de',label:t('language.de')},{value:'en',label:t('language.en')}]} onChange={(value)=>setLocale(value==='en'?'en':'de')}/></label></section>
+    <section className="provider-key-section"><header><strong>{t('settings.textAiInstruction')}</strong><span>{t('settings.textAiInstructionHint')}</span></header><label className="field-label">{t('settings.systemInstruction')}<textarea rows={4} value={textInstruction} onChange={(event)=>setTextInstruction(setTextAiSystemInstruction(event.currentTarget.value))}/></label><p className="privacy-note">{t('settings.textAiInstructionScope')}</p></section>
     <section className="provider-key-section"><header><strong>OpenRouter</strong><span>{t('settings.openrouterHint')}</span></header>
     <div className={`key-status ${saved ? 'connected' : ''}`}>{saved ? <><CheckCircle2 size={16} /> {t('settings.keyConnected')}</> : t('settings.keyMissing')}</div>
     <label className="field-label">{t('settings.apiKey')}<input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-or-v1-…" /></label>

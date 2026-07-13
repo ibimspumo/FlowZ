@@ -10,7 +10,7 @@ import { operationBatch } from "./operations";
 import { applyWorkspaceOperations, blankBoard, type ArtboardDocumentRepository, type OpenArtboardDocument } from "./repository";
 import type { ArtboardOperationBatch } from "./types";
 import type { ArtboardAssetItem } from "./types";
-import { getLibraryAssetReference, getLibraryAssetThumbnail, searchLibraryAssets } from "../persistence/assets";
+import { getLibraryAssetReference, getLibraryAssetThumbnail, saveLibraryAsset, searchLibraryAssets } from "../persistence/assets";
 import { localizeErrorMessage, useI18n } from "../i18n";
 import { createTauriArtboardAgentRuntime, executeArtboardImageIntent, persistPaidResultProposal, type ArtboardImageGenerationIntent } from "../artboard-agent";
 import { falImageModel, type FalImageConfig } from "../nodes/image/capabilities";
@@ -33,6 +33,7 @@ export type ArtboardDocumentSurfaceProps = {
 };
 
 const SAVE_DELAY_MS = 2_000;
+const readImageDataUrl=(file:File)=>new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error("Bilddatei konnte nicht gelesen werden."));reader.readAsDataURL(file);});
 
 function duplicatedBoard(opened: OpenArtboardDocument, sourceBoardId: string, snapshot?: ArtboardInputSnapshot) {
   const workspace = opened.revision.workspace;
@@ -126,7 +127,9 @@ export function ArtboardDocumentSurface(props: ArtboardDocumentSurfaceProps) {
     const fonts=Object.values(opened.revision.workspace.boards).flatMap((board)=>Object.values(board.document.layers)).filter((layer)=>layer.type==="text"&&layer.fontHash);
     if(!fonts.length)return;
     let cancelled=false;
-    void Promise.all(fonts.map((layer)=>layer.type==="text"&&layer.fontHash?loadArtboardFont(layer.fontHash,layer.fontStyle,layer.fontWeight):Promise.resolve(""))).then(()=>{if(!cancelled)setOpened((current)=>current?{...current}:current);}).catch((reason)=>{if(!cancelled)setError(reason instanceof Error?reason.message:String(reason));});
+    // Font media is presentation-only. Missing/corrupt optional font bytes fall
+    // back to fontFamily and cannot turn a successful save into an app error.
+    void Promise.all(fonts.map((layer)=>layer.type==="text"&&layer.fontHash?loadArtboardFont(layer.fontHash,layer.fontStyle,layer.fontWeight).catch(()=>""):Promise.resolve(""))).then(()=>{if(!cancelled)setOpened((current)=>current?{...current}:current);});
     return()=>{cancelled=true;};
   },[opened?.revision.id]);
 
@@ -328,6 +331,10 @@ export function ArtboardDocumentSurface(props: ArtboardDocumentSurfaceProps) {
     const id=`image-${crypto.randomUUID()}`;
     persistOperations([{type:"create-layer",boardId:board.id,rootIndex:board.document.rootLayerIds.length,layer:{id,type:"image",name:asset.name,locked:false,visible:true,version:1,geometry:{x,y,width,height,rotation:0},casHash:asset.casHash,assetVersionId:asset.versionId,fit:"contain"}}],"insert-image");
   };
+  const importImage=async(file:File,destination?:{boardId?:string;layerId?:string;x?:number;y?:number})=>{
+    if(!file.type.startsWith("image/")){setError(t('artboard.imageOnly'));return;}
+    try{setError(undefined);const summary=await saveLibraryAsset({name:file.name.replace(/\.[^.]+$/,"")||t('artboard.image'),kind:"image",dataUrl:await readImageDataUrl(file),originalName:file.name});const reference=await getLibraryAssetReference(summary.versionId);if(!reference.blobHash)throw new Error(t('direct.incomplete'));const item:ArtboardAssetItem={id:summary.assetId,versionId:summary.versionId,name:summary.name,kind:"image",casHash:reference.blobHash,previewUrl:await getLibraryAssetThumbnail(summary.versionId)};setAssets((current)=>[item,...current.filter((asset)=>asset.versionId!==item.versionId)]);setAssetTotal((current)=>current+1);insertAsset(item,destination);}catch(reason){setError(localizeErrorMessage(reason));}
+  };
 
   const chooseExportFolder = async () => {
     try {
@@ -373,6 +380,7 @@ export function ArtboardDocumentSurface(props: ArtboardDocumentSurfaceProps) {
       resolveAsset={mediaUrl}
       assets={assets} assetTotal={assetTotal} assetsLoading={assetsLoading}
       onLoadMoreAssets={() => void loadAssetPage(assetPage+1)} onInsertAsset={insertAsset}
+      onImportImage={importImage}
       upstreamUpdates={Object.fromEntries(Object.values(opened.revision.workspace.boards).flatMap((board)=>{
         const current=board.inputSnapshot.source;
         if(!current)return[];

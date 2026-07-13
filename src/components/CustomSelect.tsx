@@ -32,9 +32,12 @@ export function CustomSelect({ value, options, onChange, label, searchable = fal
   function place() {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
+    const dialog = triggerRef.current?.closest<HTMLDialogElement>('dialog[open]');
+    const bounds = dialog?.getBoundingClientRect() ?? { left: 0, right: window.innerWidth, top: 0, bottom: window.innerHeight };
     const popupHeight = searchable ? 280 : Math.min(230, uniqueOptions.length * 33 + 10);
-    const top = window.innerHeight - rect.bottom > popupHeight + 8 ? rect.bottom + 5 : Math.max(8, rect.top - popupHeight - 5);
-    setPosition({ left: Math.min(rect.left, window.innerWidth - Math.max(rect.width, 220) - 8), top, width: Math.max(rect.width, searchable ? 278 : 180) });
+    const popupWidth = Math.max(rect.width, searchable ? 278 : 180);
+    const top = bounds.bottom - rect.bottom > popupHeight + 8 ? rect.bottom + 5 : Math.max(bounds.top + 8, rect.top - popupHeight - 5);
+    setPosition({ left: Math.max(bounds.left + 8, Math.min(rect.left, bounds.right - popupWidth - 8)), top, width: popupWidth });
   }
 
   function show() {
@@ -86,6 +89,6 @@ export function CustomSelect({ value, options, onChange, label, searchable = fal
         {filtered.map((option, index) => <button id={customSelectOptionId(id,index)} type="button" role="option" aria-selected={option.value === value} className={`custom-select-option ${index === active ? 'active' : ''}`} key={option.value} onPointerMove={() => setActive(index)} onClick={() => choose(option)}><span>{option.label}</span>{option.value === value && <Check size={13} />}</button>)}
         {!filtered.length && <div className="select-empty">{t('common.noResults')}</div>}
       </div>
-    </div>, document.body)}
+    </div>, triggerRef.current?.closest('dialog[open]') ?? document.body)}
   </>;
 }

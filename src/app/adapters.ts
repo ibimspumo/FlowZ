@@ -113,22 +113,18 @@ export function edgeToFlow(
   nodes: readonly GraphNode[],
 ): FlowEdge {
   const source = nodes.find((node) => node.id === edge.sourceNodeId);
-  const target = nodes.find((node) => node.id === edge.targetNodeId);
   const kind = source && kindForModule(source.moduleId);
-  const targetKind = target && kindForModule(target.moduleId);
   const type = kind ? portType(kind, "output", edge.sourcePortId) : undefined;
-  const many = targetKind
-    ? registry[targetKind].inputs.find((port) => port.id === edge.targetPortId)
-        ?.multiple
-    : false;
   return {
     id: edge.id,
     source: edge.sourceNodeId,
     sourceHandle: edge.sourcePortId,
     target: edge.targetNodeId,
-    targetHandle: many
-      ? `${edge.targetPortId}::${edge.order}`
-      : edge.targetPortId,
+    // The React node owns one real Handle per canonical input port. Ordering of
+    // multiple cables is graph data, not part of the rendered Handle identity.
+    // Synthesizing `prompt::0` here made valid persisted/template edges point at
+    // handles that do not exist, so React Flow silently omitted their paths.
+    targetHandle: edge.targetPortId,
     type: "default",
     animated: false,
     className:

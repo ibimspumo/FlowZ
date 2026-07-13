@@ -54,9 +54,17 @@ describe("artboard workspace UI foundation", () => {
     expect(html).toContain("Zum Start");
     expect(html).toContain("Artboard-Werkzeuge");
     expect(html).toContain("Board a");
+    expect(html).toContain('accept="image/*"');
+    expect(html).toContain("Artboard entfernen");
     expect(html).not.toContain("Agent-Modell und Einstellungen");
     expect(html).not.toContain("dialog");
   });
 
   it('renders English UI chrome while preserving board content',()=>{setLocale('en');const html=renderToStaticMarkup(<ArtboardWorkspace workspace={workspace} revision={{id:'revision-a',number:1}} onBack={()=>undefined} onApplyOperations={()=>undefined} onSelectionChange={()=>undefined} onCreateBoard={()=>undefined} onDuplicateBoard={()=>undefined} onCreateVariant={()=>undefined} onIgnoreUpstreamUpdate={()=>undefined} onUpdateBoardInputs={()=>undefined} onUndo={()=>undefined} onRedo={()=>undefined} onExport={()=>undefined}/>);expect(html).toContain('Back to home');expect(html).toContain('Artboard tools');expect(html).toContain('Board a');});
+
+  it("disables removal when only the final board remains", () => {
+    const one = { ...workspace, boards: { a: workspace.boards.a }, placements: { a: workspace.placements.a }, activeBoardId: "a", selectedBoardIds: ["a"] };
+    const html = renderToStaticMarkup(<ArtboardWorkspace workspace={one} revision={{id:"revision-a",number:1}} onBack={()=>undefined} onApplyOperations={()=>undefined} onSelectionChange={()=>undefined} onCreateBoard={()=>undefined} onDuplicateBoard={()=>undefined} onCreateVariant={()=>undefined} onIgnoreUpstreamUpdate={()=>undefined} onUpdateBoardInputs={()=>undefined} onUndo={()=>undefined} onRedo={()=>undefined} onExport={()=>undefined}/>);
+    expect(html).toMatch(/disabled=""[^>]*title="Das letzte Artboard kann nicht entfernt werden\.|title="Das letzte Artboard kann nicht entfernt werden\."[^>]*disabled=""/);
+  });
 });

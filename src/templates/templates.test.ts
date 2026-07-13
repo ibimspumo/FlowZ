@@ -9,11 +9,39 @@ import * as commands from '../state/commands';
 import { CURRENT_SCHEMA_VERSION, type ProjectDocument } from '../domain';
 import { localizeTemplateMeta, setLocale } from '../i18n';
 import { localizedCanonicalNodeLabel } from '../i18n-schema';
+import { edgeToFlow, kindForModule, portType } from '../app/adapters';
+import { registry } from '../registry';
 
 describe('canvas templates', () => {
   it('keeps every bundled template compatible, acyclic and uniquely identified', () => {
     expect(new Set(canvasTemplates.map((template) => template.id)).size).toBe(canvasTemplates.length);
     for (const template of canvasTemplates) expect(validateTemplate(template), template.name).toEqual([]);
+  });
+
+  it('materializes every curated cable onto real nodes and canonical drawable ports', () => {
+    for (const template of canvasTemplates) {
+      let id = 0;
+      const graph = materializeTemplate(template, {x:0,y:0}, () => `${template.id}-${id++}`);
+      expect(graph.edges, template.name).toHaveLength(template.edges.length);
+      const byInput = new Map<string, number[]>();
+      for (const edge of graph.edges) {
+        const source = graph.nodes.find((node) => node.id === edge.sourceNodeId);
+        const target = graph.nodes.find((node) => node.id === edge.targetNodeId);
+        expect(source, `${template.name}:${edge.id}: source`).toBeDefined();
+        expect(target, `${template.name}:${edge.id}: target`).toBeDefined();
+        const sourceKind = kindForModule(source!.moduleId)!;
+        const targetKind = kindForModule(target!.moduleId)!;
+        expect(registry[sourceKind].outputs.some((port) => port.id === edge.sourcePortId), `${template.name}:${edge.id}: source port`).toBe(true);
+        expect(registry[targetKind].inputs.some((port) => port.id === edge.targetPortId), `${template.name}:${edge.id}: target port`).toBe(true);
+        expect(portType(sourceKind,'output',edge.sourcePortId), `${template.name}:${edge.id}: type`).toBe(portType(targetKind,'input',edge.targetPortId));
+        const flowEdge = edgeToFlow(edge, graph.nodes);
+        expect(flowEdge.sourceHandle, `${template.name}:${edge.id}: source handle`).toBe(edge.sourcePortId);
+        expect(flowEdge.targetHandle, `${template.name}:${edge.id}: target handle`).toBe(edge.targetPortId);
+        const key = `${edge.targetNodeId}\0${edge.targetPortId}`;
+        byInput.set(key,[...(byInput.get(key)??[]),edge.order]);
+      }
+      for (const orders of byInput.values()) expect([...orders].sort((a,b)=>a-b), template.name).toEqual(orders.map((_,index)=>index));
+    }
   });
 
   it('places the top-left template boundary exactly at the requested canvas point', () => {
@@ -52,6 +80,17 @@ describe('canvas templates', () => {
     const invalid = structuredClone(templateById('image-transform')!);
     invalid.edges.push({ source:'transform',sourcePort:'missing',target:'input',targetPort:'missing' });
     expect(validateTemplate(invalid).map((issue) => issue.message).join(' ')).toMatch(/Ausgang|Eingang|Zyklus/);
+  });
+
+  it('rejects duplicate, sparse and scalar non-zero input orders', () => {
+    const sparse = structuredClone(templateById('social-artboard')!);
+    const promptEdges = sparse.edges.filter((edge) => edge.target === 'image' && edge.targetPort === 'prompt');
+    promptEdges[0].order = 0; promptEdges[1].order = 2;
+    expect(validateTemplate(sparse).some((issue) => issue.path.endsWith('.order'))).toBe(true);
+
+    const scalar = structuredClone(templateById('image-transform')!);
+    scalar.edges[0].order = 1;
+    expect(validateTemplate(scalar).some((issue) => /Reihenfolge/.test(issue.message))).toBe(true);
   });
 
   it('keeps declared provider counts and manifest-bound configs truthful', () => {

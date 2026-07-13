@@ -1,4 +1,15 @@
-export type FlowCoverNode = { id: string; x: number; y: number; width: number; height: number; color: string };
+export type FlowCoverNode = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  label?: string;
+  moduleId?: string;
+  previewBlobHash?: string;
+  previewText?: string;
+};
 export type FlowCoverEdge = { sourceId: string; targetId: string; color: string };
 export type FlowCoverGroup = { x: number; y: number; width: number; height: number; color: string };
 export type FlowCoverInput = { nodes: FlowCoverNode[]; edges: FlowCoverEdge[]; groups: FlowCoverGroup[] };

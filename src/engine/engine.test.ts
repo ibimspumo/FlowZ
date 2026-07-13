@@ -236,6 +236,20 @@ describe('v1 migration', () => {
     expect(() => migrateProject({ schemaVersion: 3 })).toThrow(UnsupportedSchemaVersionError);
   });
 
+  it('migrates renderer slot suffixes into one canonical port with stable order', () => {
+    const migrated = migrateV1ToV2({
+      schemaVersion: 1,
+      nodes: [{id:'a'},{id:'b'},{id:'target'}],
+      edges: [
+        {id:'one',source:'a',sourceHandle:'text',target:'target',targetHandle:'prompt::0'},
+        {id:'two',source:'b',sourceHandle:'text',target:'target',targetHandle:'prompt::1'},
+      ],
+    }).project.graph.edges;
+    expect(migrated.map((edge)=>({port:edge.targetPortId,order:edge.order}))).toEqual([
+      {port:'prompt',order:0},{port:'prompt',order:1},
+    ]);
+  });
+
   it('namespaces generated imports and retains colliding legacy ids only as provenance', () => {
     const bundle = migrateV1ToV2({ schemaVersion: 1, id: 'same/project', nodes: [
       { id: 'a:b', data: { kind: 'textGeneration', id: 'duplicate', value: 'data:image/png;base64,active', cost: 0.1, history: [

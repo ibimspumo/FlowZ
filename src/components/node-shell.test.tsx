@@ -17,8 +17,8 @@ describe("shared node shell", () => {
       }} />,
     );
     expect(html).toContain('class="flow-node  status-stale"');
-    expect(html.indexOf("ports")).toBeLessThan(html.indexOf("head"));
-    expect(html.indexOf("head")).toBeLessThan(html.indexOf("body"));
+    expect(html.indexOf("head")).toBeLessThan(html.indexOf("ports"));
+    expect(html.indexOf("ports")).toBeLessThan(html.indexOf("body"));
     expect(html.indexOf("body")).toBeLessThan(html.indexOf("foot"));
   });
 });

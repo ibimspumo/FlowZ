@@ -1,6 +1,6 @@
 [package]
 name = "flowz"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local visual AI workflows"
 authors = ["FlowZ"]
 edition = "2021"

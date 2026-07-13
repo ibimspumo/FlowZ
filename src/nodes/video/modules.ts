@@ -42,6 +42,7 @@ const videoSchema = exactConfig({
   listProcessingMode: { validate: field.enum(["map", "aggregate"]) },
   endpointConfigs: { validate: jsonObject },
   seed: { validate: field.integer(0, Number.MAX_SAFE_INTEGER), optional: true },
+  fanOutResultIds: { validate: field.strings(100), optional: true },
   ...optionalExportSchema,
 });
 

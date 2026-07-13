@@ -6,6 +6,7 @@ import { BACKGROUND_REMOVAL_TOOL, defaultUpscaleConfig, falImageTool, validateUp
 import { falVideoCapability, validateFalVideoConfig, type FalVideoEndpointConfig } from '../nodes/video/capabilities';
 import { validateImageTransform, type ImageTransformRecipe } from '../nodes/image/transform';
 import { canonicalNodeRegistry } from '../nodes';
+import { materializedTemplateEdgeOrders } from './edge-order';
 
 export type TemplateIssue = { path: string; message: string };
 
@@ -87,6 +88,8 @@ export function validateTemplate(template: CanvasTemplate): TemplateIssue[] {
 
   const adjacency = new Map(template.nodes.map((node) => [node.id, [] as string[]]));
   const occupied = new Set<string>();
+  const resolvedOrders = materializedTemplateEdgeOrders(template);
+  const orderedInputs = new Map<string, { index:number; order:number; multiple:boolean }[]>();
   for (const [index, edge] of template.edges.entries()) {
     const source = template.nodes.find((node) => node.id === edge.source);
     const target = template.nodes.find((node) => node.id === edge.target);
@@ -100,8 +103,21 @@ export function validateTemplate(template: CanvasTemplate): TemplateIssue[] {
     if (output && input && !compatible(output.type, input.type)) issues.push({ path: `edges[${index}]`, message: `${output.type} kann nicht mit ${input.type} verbunden werden.` });
     const targetKey = `${edge.target}\0${edge.targetPort}`;
     if (input && !input.multiple && occupied.has(targetKey)) issues.push({ path: `edges[${index}]`, message: 'Ein einzelner Eingang ist mehrfach belegt.' });
+    if (edge.order !== undefined && (!Number.isSafeInteger(edge.order) || edge.order < 0)) issues.push({path:`edges[${index}].order`,message:'Reihenfolge muss eine nicht-negative Ganzzahl sein.'});
+    if (input) orderedInputs.set(targetKey,[...(orderedInputs.get(targetKey)??[]),{index,order:resolvedOrders[index],multiple:Boolean(input.multiple)}]);
     occupied.add(targetKey);
     adjacency.get(edge.source)?.push(edge.target);
+  }
+
+  for (const entries of orderedInputs.values()) {
+    const sorted = entries.map((entry)=>entry.order).sort((left,right)=>left-right);
+    const expected = sorted.map((_,index)=>index);
+    if (new Set(sorted).size !== sorted.length || sorted.some((order,index)=>order!==expected[index])) {
+      for (const entry of entries) issues.push({path:`edges[${entry.index}].order`,message:'Reihenfolge muss je Mehrfacheingang eindeutig und lückenlos bei 0 beginnen.'});
+    }
+    if (!entries[0]?.multiple && sorted.some((order)=>order!==0)) {
+      for (const entry of entries) issues.push({path:`edges[${entry.index}].order`,message:'Ein einzelner Eingang verwendet immer Reihenfolge 0.'});
+    }
   }
 
   for (const [index, group] of template.groups.entries()) {
